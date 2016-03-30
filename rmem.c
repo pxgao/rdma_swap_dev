@@ -25,6 +25,8 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
+#include "rdma_library.h"
+
 MODULE_LICENSE("Dual BSD/GPL");
 
 static int npages = 2048 * 1024; 
