@@ -377,7 +377,7 @@ u64 rdma_map_address(void* addr, int length)
 {
     u64 dma_addr;
 
-    LOG_KERN(LOG_INFO, ("Mapping addr\n"));
+    LOG_KERN(LOG_INFO, ("Mapping addr %p len %d\n", addr, length));
 
     dma_addr = ib_dma_map_single(rdma_ib_device.dev, addr, length, DMA_BIDIRECTIONAL);
     if (ib_dma_mapping_error(rdma_ib_device.dev, dma_addr) != 0) {
