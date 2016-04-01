@@ -123,7 +123,9 @@ static void rmem_request(struct request_queue *q)
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
+    pr_info("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
     rdma_op(devices[q->id]->rdma_ctx, rdma_req_p, 1);
+    pr_info("Done.\n");
     if ( ! __blk_end_request_cur(req, 0) ) {
       req = blk_fetch_request(q);
     }
@@ -182,6 +184,7 @@ static int __init rmem_init(void) {
 
 
   while(1){
+    queue = NULL;
     tmp_srv = strsep(&servers_str_p, delim);
     tmp_port = strsep(&servers_str_p, delim);
     if (tmp_srv && tmp_port){
@@ -202,18 +205,19 @@ static int __init rmem_init(void) {
       device->rdma_ctx = rdma_init(npages, tmp_srv, port);
       if(device->rdma_ctx == NULL){
         pr_info("rdma_init() failed\n");
-        goto out_rdma_exit;
+        goto out;
       }
       /*
        * Get a request queue.
        */
       queue = blk_init_queue(rmem_request, &device->lock);
       if (queue == NULL)
-        goto out;
+        goto out_rdma_exit;
       pr_info("init queue id %d\n", queue->id);
       if (queue->id >= DEVICE_BOUND) 
-        goto out;
+        goto out_rdma_exit;
       scnprintf(dev_name, 20, "rmem%d", queue->id);
+      devices[queue->id] = device;
       blk_queue_physical_block_size(queue, PAGE_SIZE);
       blk_queue_logical_block_size(queue, PAGE_SIZE);
       blk_queue_io_min(queue, PAGE_SIZE);
@@ -226,7 +230,7 @@ static int __init rmem_init(void) {
       pr_info("Registering blkdev %s major_num %d\n", dev_name, major_num);
       if (major_num < 0) {
         printk(KERN_WARNING "rmem: unable to get major number\n");
-        goto out;
+        goto out_rdma_exit;
       }
       /*
        * And the gendisk structure.
@@ -243,7 +247,6 @@ static int __init rmem_init(void) {
       device->gd->queue = queue;
       add_disk(device->gd);
   
-      devices[queue->id] = device;
       
     }
     else
@@ -257,6 +260,8 @@ out_unregister:
 out_rdma_exit:
   rdma_exit(device->rdma_ctx);
 out:
+  if(queue && devices[queue->id])
+    devices[queue->id] = NULL;
   for(c = 0; c < DEVICE_BOUND; c++) {
     if(devices[c]){
       unregister_blkdev(devices[c]->gd->major, devices[c]->gd->disk_name);
