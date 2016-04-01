@@ -243,9 +243,11 @@ static int __init rmem_init(void) {
       device->gd->fops = &rmem_ops;
       device->gd->private_data = device;
       strcpy(device->gd->disk_name, dev_name);
-      set_capacity(device->gd, npages * SECTORS_PER_PAGE);
+      set_capacity(device->gd, 0);
       device->gd->queue = queue;
       add_disk(device->gd);
+      set_capacity(device->gd, npages * SECTORS_PER_PAGE);
+
   
       
     }
