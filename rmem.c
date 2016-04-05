@@ -46,7 +46,7 @@ module_param(servers, charp, 0);
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
-
+#define MAX_REQ 1024
 
 /*
  * The internal representation of our device.
@@ -57,6 +57,7 @@ struct rmem_device {
   struct gendisk *gd;
   int major_num;
   rdma_ctx_t rdma_ctx;
+  rdma_request rdma_req[MAX_REQ];
 };
 
 struct rmem_device* devices[DEVICE_BOUND];
@@ -66,8 +67,8 @@ int initd = 0;
 static void rmem_request(struct request_queue *q) 
 {
   struct request *req;
-  rdma_request rdma_req;
-  rdma_req_t rdma_req_p = &rdma_req;
+  rdma_req_t rdma_req_p;
+  int count = 0;
 
 
   req = blk_fetch_request(q);
@@ -79,17 +80,24 @@ static void rmem_request(struct request_queue *q)
     }
 //    rmem_transfer(devices[q->id], blk_rq_pos(req), blk_rq_cur_sectors(req),
 //        bio_data(req->bio), rq_data_dir(req));
+    rdma_req_p = devices[q->id]->rdma_req + count;
     rdma_req_p->rw = rq_data_dir(req)?RDMA_WRITE:RDMA_READ;
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
-    LOG_KERN(LOG_INFO, ("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length));
-    rdma_op(devices[q->id]->rdma_ctx, rdma_req_p, 1);
-    LOG_KERN(LOG_INFO, ("Done.\n"));
+    count++;
+    if(count >= MAX_REQ){
+      rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
+      count = 0;
+    }
+    //LOG_KERN(LOG_INFO, ("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length));
+    //LOG_KERN(LOG_INFO, ("Done.\n"));
     if ( ! __blk_end_request_cur(req, 0) ) {
       req = blk_fetch_request(q);
     }
   }
+  if(count)
+    rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
 
 }
 

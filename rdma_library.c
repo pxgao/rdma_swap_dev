@@ -447,6 +447,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
         }
     } while (ret > 0);
 
+    LOG_KERN(LOG_INFO, ("outstanding_requests %lu\n", ctx->outstanding_requests));
     if (ctx->outstanding_requests == 0){
         wake_up_interruptible(&(ctx->queue));
     }
@@ -502,9 +503,9 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
    
     // Note that we set the CQ context to our ctx structure 
     ctx->send_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_send, cq_event_handler_send, ctx, 10, 0);
+            comp_handler_send, cq_event_handler_send, ctx, 1024, 0);
     ctx->recv_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_recv, cq_event_handler_recv, ctx, 10, 0);
+            comp_handler_recv, cq_event_handler_recv, ctx, 1024, 0);
     CHECK_MSG_RET(ctx->send_cq != 0, "Error creating CQ", 0);
     CHECK_MSG_RET(ctx->recv_cq != 0, "Error creating CQ", 0);
     
@@ -517,8 +518,8 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
     memset(&ctx->qp_attr, 0, sizeof(struct ib_qp_init_attr));
     ctx->qp_attr.send_cq = ctx->send_cq;
     ctx->qp_attr.recv_cq = ctx->recv_cq;
-    ctx->qp_attr.cap.max_send_wr  = 10;
-    ctx->qp_attr.cap.max_recv_wr  = 10;
+    ctx->qp_attr.cap.max_send_wr  = 1024;
+    ctx->qp_attr.cap.max_recv_wr  = 1024;
     ctx->qp_attr.cap.max_send_sge = 1;
     ctx->qp_attr.cap.max_recv_sge = 1;
     ctx->qp_attr.cap.max_inline_data = 0;
