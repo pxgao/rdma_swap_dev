@@ -9,7 +9,7 @@ done
 
 while [ -n "$(lsmod | grep rmem)" ]
 do
-  rmmod rmem
+  rmmod rmem_rdma
 done
 
 

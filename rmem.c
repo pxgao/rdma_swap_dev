@@ -30,7 +30,7 @@
 #include <linux/seq_file.h>
 
 #include "rdma_library.h"
-
+#include "log.h"
 MODULE_LICENSE("Dual BSD/GPL");
 
 static int npages = 2048 * 1024; 
@@ -61,54 +61,14 @@ struct rmem_device {
 
 struct rmem_device* devices[DEVICE_BOUND];
 
-
-
-
-/*
- * Handle an I/O request.
- */
-
-//static void rmem_transfer(struct rmem_device *dev, sector_t sector,
-//    unsigned long nsect, char *buffer, int write) 
-//{
-//  int i;
-//  int page;
-//  int npage;
-//
-//  if (sector % SECTORS_PER_PAGE != 0 || nsect % SECTORS_PER_PAGE != 0) {
-//    pr_err("incorrect align: %lu %lu %d\n", sector, nsect, write);
-//    return;
-//  }
-//
-//  page = sector / SECTORS_PER_PAGE;
-//  npage = nsect / SECTORS_PER_PAGE;
-//
-//  if (page + npage - 1 >= npages) {
-//    printk (KERN_NOTICE "rmem: Beyond-end write (%d %d %d)\n", page, npage, npages);
-//    return;
-//  }
-//
-//
-//  if (write) {
-//    
-//    for (i = 0; i < npage; i++)
-//      copy_page(dev->data[page + i], buffer + PAGE_SIZE * i);
-//
-//  } else {
-//
-//    for (i = 0; i < npage; i++)
-//      copy_page(buffer + PAGE_SIZE * i, dev->data[page + i]);
-//    
-//  }
-//  
-//
-//}
+int initd = 0;
 
 static void rmem_request(struct request_queue *q) 
 {
   struct request *req;
   rdma_request rdma_req;
   rdma_req_t rdma_req_p = &rdma_req;
+
 
   req = blk_fetch_request(q);
   while (req != NULL) {
@@ -123,13 +83,14 @@ static void rmem_request(struct request_queue *q)
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
-    pr_info("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
+    LOG_KERN(LOG_INFO, ("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length));
     rdma_op(devices[q->id]->rdma_ctx, rdma_req_p, 1);
-    pr_info("Done.\n");
+    LOG_KERN(LOG_INFO, ("Done.\n"));
     if ( ! __blk_end_request_cur(req, 0) ) {
       req = blk_fetch_request(q);
     }
   }
+
 }
 
 /*
@@ -159,7 +120,6 @@ static struct block_device_operations rmem_ops = {
 };
 
 
-
 static int __init rmem_init(void) {
   int c,major_num;
   struct rmem_device* device;
@@ -171,6 +131,7 @@ static int __init rmem_init(void) {
   char* tmp_port;
   char* tmp_port_end_p;
   int port;
+
   
   for(c = 0; c < DEVICE_BOUND; c++) {
     devices[c] = NULL;
@@ -248,12 +209,13 @@ static int __init rmem_init(void) {
       add_disk(device->gd);
       set_capacity(device->gd, npages * SECTORS_PER_PAGE);
 
-  
+      //test(device->rdma_ctx);  
       
     }
     else
       break;
   }
+  initd = 1;
   pr_info("rmem_rdma successfully loaded!\n");
   return 0;
 

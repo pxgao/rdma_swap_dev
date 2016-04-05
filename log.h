@@ -2,7 +2,7 @@
 #define _LOG_H_
 
 #define LOG_INFO 5
-#define DEBUG
+//#define DEBUG
 
 #ifndef LOG_LEVEL
 #ifdef DEBUG

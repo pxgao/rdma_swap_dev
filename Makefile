@@ -16,7 +16,7 @@ clean:
 	$(MAKE) -C $(KDIR) SUBDIRS=$(PWD) clean
 
 load:
-	sudo insmod rmem_rdma.ko npages=100 servers=10.10.49.98:18515
+	sudo insmod rmem_rdma.ko npages=100000 servers=10.10.49.98:18515
 
 unload:
 	sudo rmmod -f rmem_rdma.ko
