@@ -9,6 +9,7 @@ insmod rmem_rdma.ko npages=498073 servers=10.10.49.84:18515
 for s in $(ls /dev/rmem_rdma*);
 do
   mkswap -f $s
+  sleep 1
   swapon $s
 done
             

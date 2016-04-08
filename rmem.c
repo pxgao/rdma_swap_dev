@@ -70,7 +70,7 @@ static void rmem_request(struct request_queue *q)
   struct request *req;
   rdma_req_t rdma_req_p;
   rdma_req_t last_rdma_req_p = NULL;
-  int count = 0;
+  int i, count = 0;
   unsigned long flags;
 
   //spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
@@ -101,6 +101,8 @@ static void rmem_request(struct request_queue *q)
       count++;
     if(count >= MAX_REQ){
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
+      for(i = 0; i < count; i++)
+        rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
       count = 0;
     }
     //LOG_KERN(LOG_INFO, ("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length));
@@ -109,8 +111,11 @@ static void rmem_request(struct request_queue *q)
       req = blk_fetch_request(q);
     }
   }
-  if(count)
+  if(count) {
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
+    for(i = 0; i < count; i++)
+      rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+  }
   //spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
 }
 

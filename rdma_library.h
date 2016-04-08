@@ -23,7 +23,7 @@ typedef struct rdma_request
 } rdma_request;
 
 u64 rdma_map_address(void* addr, int length);
-
+void rdma_unmap_address(u64 addr, int length);
 int rdma_library_ready(void);
 
 int rdma_library_init(void);

@@ -392,6 +392,12 @@ u64 rdma_map_address(void* addr, int length)
     return dma_addr;
 }
 
+void rdma_unmap_address(u64 addr, int length)
+{
+    ib_dma_unmap_single(rdma_ib_device.dev, addr, length, DMA_BIDIRECTIONAL);
+    return;
+}
+
 static int rdma_setup(rdma_ctx_t ctx)
 {
     // create receive buffer
