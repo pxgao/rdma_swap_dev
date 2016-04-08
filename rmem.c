@@ -47,13 +47,14 @@ module_param(servers, charp, 0);
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
 #define MAX_REQ 1024
-
+#define MERGE_REQ true
 /*
  * The internal representation of our device.
  */
 struct rmem_device {
   unsigned long size;
   spinlock_t lock;
+  spinlock_t rdma_lock;
   struct gendisk *gd;
   int major_num;
   rdma_ctx_t rdma_ctx;
@@ -68,9 +69,11 @@ static void rmem_request(struct request_queue *q)
 {
   struct request *req;
   rdma_req_t rdma_req_p;
+  rdma_req_t last_rdma_req_p = NULL;
   int count = 0;
+  unsigned long flags;
 
-
+  //spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
   req = blk_fetch_request(q);
   while (req != NULL) {
     if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
@@ -81,11 +84,21 @@ static void rmem_request(struct request_queue *q)
 //    rmem_transfer(devices[q->id], blk_rq_pos(req), blk_rq_cur_sectors(req),
 //        bio_data(req->bio), rq_data_dir(req));
     rdma_req_p = devices[q->id]->rdma_req + count;
+    
     rdma_req_p->rw = rq_data_dir(req)?RDMA_WRITE:RDMA_READ;
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
-    count++;
+    if(MERGE_REQ && count > 0){
+      last_rdma_req_p = devices[q->id]->rdma_req + count - 1;
+      if(rdma_req_p->rw == last_rdma_req_p->rw && 
+            last_rdma_req_p->dma_addr + last_rdma_req_p->length == rdma_req_p->dma_addr &&
+            last_rdma_req_p->remote_offset + last_rdma_req_p->length == rdma_req_p->remote_offset)
+        last_rdma_req_p->length += rdma_req_p->length;
+      else
+        count++;
+    }else
+      count++;
     if(count >= MAX_REQ){
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
       count = 0;
@@ -98,7 +111,7 @@ static void rmem_request(struct request_queue *q)
   }
   if(count)
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
-
+  //spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
 }
 
 /*
@@ -170,6 +183,7 @@ static int __init rmem_init(void) {
        */
       device->size = npages * PAGE_SIZE;
       spin_lock_init(&(device->lock));
+      spin_lock_init(&(device->rdma_lock));
     
       device->rdma_ctx = rdma_init(npages, tmp_srv, port);
       if(device->rdma_ctx == NULL){
@@ -185,7 +199,7 @@ static int __init rmem_init(void) {
       pr_info("init queue id %d\n", queue->id);
       if (queue->id >= DEVICE_BOUND) 
         goto out_rdma_exit;
-      scnprintf(dev_name, 20, "rmem%d", queue->id);
+      scnprintf(dev_name, 20, "rmem_rdma%d", queue->id);
       devices[queue->id] = device;
       blk_queue_physical_block_size(queue, PAGE_SIZE);
       blk_queue_logical_block_size(queue, PAGE_SIZE);

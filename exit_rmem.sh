@@ -1,5 +1,5 @@
 #!/bin/sh
-for s in $(ls /dev/rmem*)
+for s in $(ls /dev/rmem_rdma*)
 do
   while [ -n "$(cat /proc/swaps | grep $s)" ]
   do

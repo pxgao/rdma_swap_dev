@@ -39,7 +39,7 @@ struct rdma_ctx {
 
     char* rdma_recv_buffer;
     u64 dma_addr;
-    unsigned long rem_mem_size;
+    unsigned long long int rem_mem_size;
 
     int rem_qpn;
     int rem_psn;
@@ -50,6 +50,7 @@ struct rdma_ctx {
 
     unsigned long outstanding_requests;
     wait_queue_head_t queue;
+
 };
 
 struct rdma_req_t {
@@ -287,7 +288,7 @@ static int handshake(rdma_ctx_t ctx)
     
 
     // first send mem size
-    sprintf(data, "%lu", ctx->rem_mem_size);
+    snprintf(data, 500, "%llu", ctx->rem_mem_size);
     printk(KERN_WARNING "Sending: %s\n", data);
     send_data(ctx, data, strlen(data));
 
@@ -492,7 +493,7 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
         return NULL;
 
     memset(ctx, 0, sizeof(struct rdma_ctx));
-    ctx->rem_mem_size = npages * (1024 * 4);
+    ctx->rem_mem_size = (unsigned long long)npages * (1024 * 4);
 
     if (!rdma_ib_device.ib_device_initialized) {
         LOG_KERN(LOG_INFO, ("ERROR"));
@@ -621,6 +622,7 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     int i;
     struct rdma_ctx* ctx = ct;
     //ctx->outstanding_requests = n_requests;
+
     LOG_KERN(LOG_INFO, ("rdma op with %d reqs\n", n_requests));
     ctx->outstanding_requests = n_requests;
 
@@ -641,8 +643,6 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     LOG_KERN(LOG_INFO, ("Waiting for requests completion\n"));
     // wait until all requests are done
 
-    //for (i = 0; atomic64_read(&ctx->outstanding_requests); i++)
-    //    ;
     wait_event_interruptible(ctx->queue, ctx->outstanding_requests == 0);
 
     LOG_KERN(LOG_INFO, ("All request done. Outstanding req = %lu\n", ctx->outstanding_requests));
