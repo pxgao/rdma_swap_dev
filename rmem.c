@@ -73,7 +73,9 @@ static void rmem_request(struct request_queue *q)
   int i, count = 0;
   unsigned long flags;
 
-  //spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
+
+  LOG_KERN(LOG_INFO, "======New rmem request======", 0);
+  spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
   req = blk_fetch_request(q);
   while (req != NULL) {
     if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
@@ -95,28 +97,36 @@ static void rmem_request(struct request_queue *q)
             last_rdma_req_p->dma_addr + last_rdma_req_p->length == rdma_req_p->dma_addr &&
             last_rdma_req_p->remote_offset + last_rdma_req_p->length == rdma_req_p->remote_offset)
         last_rdma_req_p->length += rdma_req_p->length;
-      else
+      else{
+        LOG_KERN(LOG_INFO, "Constructing RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
         count++;
-    }else
+      }
+    }else{
+      LOG_KERN(LOG_INFO, "Constructing RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
       count++;
+    }
     if(count >= MAX_REQ){
+      LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
+      LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
       for(i = 0; i < count; i++)
         rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
       count = 0;
     }
-    //LOG_KERN(LOG_INFO, ("Sending RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d\n", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length));
     //LOG_KERN(LOG_INFO, ("Done.\n"));
     if ( ! __blk_end_request_cur(req, 0) ) {
       req = blk_fetch_request(q);
     }
   }
   if(count) {
+    LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
+    LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
     for(i = 0; i < count; i++)
       rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
   }
-  //spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
+  LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
+  spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
 }
 
 /*
