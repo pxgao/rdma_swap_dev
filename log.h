@@ -14,8 +14,8 @@
 
 
 
-# define DEBUG_TTY
-//# define DEBUG_PRINTK
+//# define DEBUG_TTY
+# define DEBUG_PRINTK
 
 # ifdef DEBUG_TTY
 #  include <linux/spinlock.h>

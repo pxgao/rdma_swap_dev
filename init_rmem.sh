@@ -4,7 +4,7 @@ if [ -n "$(cat /proc/swaps | grep /mnt/swap)" ]
 then
   swapoff /mnt/swap
 fi
-insmod rmem_rdma.ko npages=498073 servers=10.10.49.85:18515
+insmod rmem_rdma.ko npages=598073 servers=10.10.49.85:18515
 
 for s in $(ls /dev/rmem_rdma*);
 do
