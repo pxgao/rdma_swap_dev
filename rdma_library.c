@@ -5,6 +5,7 @@
 #include <rdma/ib_verbs.h>
 #include <rdma/rdma_cm.h>
 #include <linux/smp.h>
+#include <linux/version.h>
 
 #define RDMA_BUFFER_SIZE (1024*1024)
 
@@ -229,16 +230,22 @@ static int receive_data(rdma_ctx_t ctx, char* data, int size) {
     int retval;
     mm_segment_t oldfs;
     
+    iov.iov_base = data;
+    iov.iov_len  = size;
     
     msg.msg_name = 0;
     msg.msg_namelen = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
     msg.msg_control = NULL;
+#else
+    iov_iter_init(&msg.msg_iter, READ, &iov, 1, iov.iov_len); 
+#endif
     msg.msg_controllen = 0;
     msg.msg_flags = 0;
-    msg.msg_iov->iov_base= data;
-    msg.msg_iov->iov_len = size;
+    //msg.msg_iov->iov_base= data;
+    //msg.msg_iov->iov_len = size;
     
 
     oldfs = get_fs();
@@ -259,22 +266,32 @@ static int send_data(rdma_ctx_t ctx, char* data, int size) {
     
     printk(KERN_INFO "Exchanging data");
 
+    iov.iov_base = data;
+    iov.iov_len  = size;
+    
     msg.msg_name     = 0;
     msg.msg_namelen  = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
     msg.msg_iov      = &iov;
     msg.msg_iovlen   = 1;
     msg.msg_control  = NULL;
+#else
+    iov_iter_init(&msg.msg_iter, WRITE, &iov, 1, iov.iov_len);
+#endif
     msg.msg_controllen = 0;
     msg.msg_flags    = 0;
-    msg.msg_iov->iov_len = size;
-    msg.msg_iov->iov_base = data;
+    //msg.msg_iov->iov_len = size;
+    //msg.msg_iov->iov_base = data;
 
     printk(KERN_INFO "Sending data..");
     oldfs = get_fs();
     set_fs(KERNEL_DS);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,1,0) 
     retval = sock_sendmsg(ctx->sock, &msg, size);
-
+#else
+    retval = sock_sendmsg(ctx->sock, &msg);
+#endif
     set_fs(oldfs);
 
     return 0;
