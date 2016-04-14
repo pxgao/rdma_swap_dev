@@ -75,7 +75,7 @@ static void rmem_request(struct request_queue *q)
 
 
   LOG_KERN(LOG_INFO, "======New rmem request======", 0);
-  spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
+  //spin_lock_irqsave(&devices[q->id]->rdma_lock, flags);
   req = blk_fetch_request(q);
   while (req != NULL) {
     if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
@@ -126,7 +126,7 @@ static void rmem_request(struct request_queue *q)
       rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
   }
   LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
-  spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
+  //spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
 }
 
 /*

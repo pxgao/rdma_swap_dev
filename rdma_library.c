@@ -53,7 +53,7 @@ struct rdma_ctx {
     //volatile unsigned long outstanding_requests;
     atomic_t outstanding_requests;
     wait_queue_head_t queue;
-
+    wait_queue_head_t queue2;
 };
 
 struct rdma_req_t {
@@ -447,8 +447,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
     do {
         while (ib_poll_cq(cq, 1, &wc)> 0) {
             if (wc.status == IB_WC_SUCCESS) {
-                LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
-                            (unsigned long long int)wc.wr_id,
+                LOG_KERN(LOG_INFO, "IB_WC_SUCCESS op: %s byte_len: %u",
                             wc.opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
                             wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
                             "other", (unsigned) wc.byte_len);
@@ -467,7 +466,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 
     LOG_KERN(LOG_INFO, "outstanding_requests %lu", atomic_read(&ctx->outstanding_requests));
     if (atomic_read(&ctx->outstanding_requests) == 0){
-        wake_up_interruptible(&(ctx->queue));
+        wake_up_interruptible_all(&ctx->queue);
     }
 }
 
@@ -629,9 +628,10 @@ int post_read_wr(rdma_ctx_t ctx, u64 local_addr, uint32_t remote_offset, int len
 
 int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 {
-    int i;
+    int i, ret;
     struct rdma_ctx* ctx = ct;
 
+    wait_event_interruptible(ctx->queue2, (atomic_read(&ctx->outstanding_requests) == 0));
     
     LOG_KERN(LOG_INFO, "rdma op with %d reqs, pid %d, cpu %d", n_requests, current->pid, smp_processor_id());
     //ctx->outstanding_requests = n_requests;
@@ -653,9 +653,9 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", atomic_read(&ctx->outstanding_requests));
     // wait until all requests are done
 
-    wait_event_interruptible(ctx->queue, atomic_read(&ctx->outstanding_requests) == 0);
-
-    LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu", ctx->outstanding_requests);
+    ret = wait_event_interruptible(ctx->queue, (atomic_read(&ctx->outstanding_requests) == 0));
+    wake_up_interruptible(&ctx->queue2);
+    //LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu, cond = %d", atomic_read(&ctx->outstanding_requests), ret);
 
     return 0;
 }
