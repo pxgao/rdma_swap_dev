@@ -34,7 +34,7 @@ int print_dmesg(const char* file, const char* func, const int line, const char *
         }\
     } while(0);
 #  else
-#   define LOG_(LEVEL, FMT, ...) ;
+#   define LOG_KERN(LEVEL, FMT, ...) ;
 #  endif
 # endif
 

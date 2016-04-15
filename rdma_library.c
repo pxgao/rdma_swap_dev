@@ -465,8 +465,8 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
     } while (ret > 0);
 
     LOG_KERN(LOG_INFO, "outstanding_requests %lu", atomic_read(&ctx->outstanding_requests));
-    if (atomic_read(&ctx->outstanding_requests) == 0){
-        wake_up_interruptible_all(&ctx->queue);
+    if (atomic_read(&ctx->outstanding_requests) <= 0){
+        wake_up_interruptible(&ctx->queue);
     }
 }
 
@@ -653,9 +653,10 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", atomic_read(&ctx->outstanding_requests));
     // wait until all requests are done
 
-    ret = wait_event_interruptible(ctx->queue, (atomic_read(&ctx->outstanding_requests) == 0));
-    wake_up_interruptible(&ctx->queue2);
-    //LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu, cond = %d", atomic_read(&ctx->outstanding_requests), ret);
+    ret = wait_event_interruptible(ctx->queue, (atomic_read(&ctx->outstanding_requests) <= 0));
+    //while (atomic_read(&ctx->outstanding_requests) != 0);
+    BUG_ON(ret);
+    LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu, cond = %d", atomic_read(&ctx->outstanding_requests), ret);
 
     return 0;
 }
