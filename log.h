@@ -22,7 +22,7 @@
 int print_tty(const char* file, const char* func, const int line, const char *fmt,...);
 #  define LOG_KERN(LEVEL, FMT, ...) do {\
         if ((LEVEL) < LOG_LEVEL) {\
-            print_tty(NULL,__FUNCTION__,__LINE__,FMT,__VA_ARGS__); \
+            print_tty(NULL,__FUNCTION__,__LINE__,FMT,##__VA_ARGS__); \
         } \
    } while(0);
 # else
@@ -30,7 +30,7 @@ int print_tty(const char* file, const char* func, const int line, const char *fm
 int print_dmesg(const char* file, const char* func, const int line, const char *fmt,...);
 #   define LOG_KERN(LEVEL, FMT, ...) do {\
         if ((LEVEL) < LOG_LEVEL) {\
-            print_dmesg(NULL,__FUNCTION__,__LINE__,FMT,__VA_ARGS__); \
+            print_dmesg(NULL,__FUNCTION__,__LINE__,FMT,##__VA_ARGS__); \
         }\
     } while(0);
 #  else
