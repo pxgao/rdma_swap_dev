@@ -57,6 +57,6 @@ int print_dmesg(const char* file, const char* func, const int line, const char *
   n = vsnprintf(buf, 256, fmt, ap);
   va_end(ap);
 
-  printk(KERN_DEBUG "%s\t%s\n", buf0, buf);
+  printk(KERN_ERR "%s\t%s\n", buf0, buf);
   return n;
 }

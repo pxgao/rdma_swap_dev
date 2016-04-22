@@ -46,8 +46,8 @@ module_param(servers, charp, 0);
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
-#define MAX_REQ 1024
-#define MERGE_REQ true
+#define MAX_REQ 1
+#define MERGE_REQ false
 /*
  * The internal representation of our device.
  */
@@ -59,18 +59,69 @@ struct rmem_device {
   int major_num;
   rdma_ctx_t rdma_ctx;
   rdma_request rdma_req[MAX_REQ];
+  u8 ** data;
 };
 
 struct rmem_device* devices[DEVICE_BOUND];
 
 int initd = 0;
 
+void* temp;
+
 static void rmem_request(struct request_queue *q) 
+  __releases(q->queue_lock) __acquires(q->queue_lock)
+{
+  struct request *req;
+  rdma_req_t rdma_req_p;
+  unsigned long flags;
+  int ret;
+
+  LOG_KERN(LOG_INFO, "======New rmem request======");  
+
+  while ((req = blk_fetch_request(q)) != NULL) {
+    if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
+      printk (KERN_NOTICE "Skip non-CMD request\n");
+      __blk_end_request_all(req, -EIO);
+      continue;
+    }
+    //spin_unlock_irq(q->queue_lock);
+    do{
+      rdma_req_p = devices[q->id]->rdma_req;
+      
+      rdma_req_p->rw = rq_data_dir(req)?RDMA_WRITE:RDMA_READ;
+      rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
+      rdma_req_p->dma_addr = rdma_map_address(temp, rdma_req_p->length);
+      rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
+      rdma_req_p->blk_req = req;
+      
+      //LOG_KERN(LOG_INFO, "Sending rdma reqs");
+      //spin_lock_irq(&devices[q->id]->rdma_lock);
+      rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, 1);
+      rdma_unmap_address(rdma_req_p->dma_addr, rdma_req_p->length);
+      if(rdma_req_p->rw == RDMA_WRITE)
+        copy_page(devices[q->id]->data[blk_rq_pos(req) / SECTORS_PER_PAGE], bio_data(req->bio));
+      else
+        copy_page(bio_data(req->bio), devices[q->id]->data[blk_rq_pos(req) / SECTORS_PER_PAGE]);
+      //spin_unlock_irq(&devices[q->id]->rdma_lock);
+      //LOG_KERN(LOG_INFO, "end req %p", rdma_req_p->blk_req);
+   
+      //spin_lock_irq(q->queue_lock);
+      ret = __blk_end_request_cur(req, 0); 
+      //spin_unlock_irq(q->queue_lock);
+    }
+    while (ret);
+    //spin_lock_irq(q->queue_lock);
+  }
+
+  LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
+}
+/*
+static void rmem_request2(struct request_queue *q) 
 {
   struct request *req;
   rdma_req_t rdma_req_p;
   rdma_req_t last_rdma_req_p = NULL;
-  int i, count = 0;
+  int ret, i, count = 0;
   unsigned long flags;
 
 
@@ -91,6 +142,7 @@ static void rmem_request(struct request_queue *q)
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
+    rdma_req_p->blk_req = req;
     if(MERGE_REQ && count > 0){
       last_rdma_req_p = devices[q->id]->rdma_req + count - 1;
       if(rdma_req_p->rw == last_rdma_req_p->rw && 
@@ -98,19 +150,24 @@ static void rmem_request(struct request_queue *q)
             last_rdma_req_p->remote_offset + last_rdma_req_p->length == rdma_req_p->remote_offset)
         last_rdma_req_p->length += rdma_req_p->length;
       else{
-        LOG_KERN(LOG_INFO, "Constructing RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
+        LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
         count++;
       }
     }else{
-      LOG_KERN(LOG_INFO, "Constructing RDMA req w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
+      LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
       count++;
     }
     if(count >= MAX_REQ){
       LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
       LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-      for(i = 0; i < count; i++)
+      for(i = 0; i < count; i++){
         rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+        //spin_lock(&devices[q->id]->lock);
+        //ret = __blk_end_request_cur(devices[q->id]->rdma_req[i].blk_req, 0);
+        //spin_unlock(&devices[q->id]->lock);
+        LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
+      }
       count = 0;
     }
     //LOG_KERN(LOG_INFO, ("Done.\n"));
@@ -122,12 +179,21 @@ static void rmem_request(struct request_queue *q)
     LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
     LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-    for(i = 0; i < count; i++)
+    //for(i = 0; i < count; i++)
+    //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+    for(i = 0; i < count; i++){
       rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+      //spin_lock(&devices[q->id]->lock);
+      //ret = __blk_end_request_cur(devices[q->id]->rdma_req[i].blk_req, 0);
+      //spin_unlock(&devices[q->id]->lock);
+      LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
+    }
   }
   LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
   //spin_unlock_irqrestore(&devices[q->id]->rdma_lock, flags);
 }
+*/
+
 
 /*
  * The HDIO_GETGEO ioctl is handled in blkdev_ioctl(), which
@@ -157,7 +223,7 @@ static struct block_device_operations rmem_ops = {
 
 
 static int __init rmem_init(void) {
-  int c,major_num;
+  int c,major_num,i;
   struct rmem_device* device;
   struct request_queue *queue;
   char dev_name[20];
@@ -168,7 +234,7 @@ static int __init rmem_init(void) {
   char* tmp_port_end_p;
   int port;
 
-  
+  temp = kmalloc(PAGE_SIZE * 10, GFP_KERNEL); 
   for(c = 0; c < DEVICE_BOUND; c++) {
     devices[c] = NULL;
   }
@@ -193,9 +259,29 @@ static int __init rmem_init(void) {
       pr_info("Connecting to server %s port %d \n", tmp_srv, port);
 
       device = vmalloc(sizeof(*device));
-      /*
-       * Set up our internal device.
-       */
+      
+
+      device->data = vmalloc(npages * sizeof(u8 *));
+      if (device->data == NULL)
+        return -ENOMEM;
+
+      for (i = 0; i < npages; i++) {
+        device->data[i] = kmalloc(PAGE_SIZE, GFP_KERNEL);
+        if (device->data[i] == NULL) {
+          int j;
+          pr_info("rmem: can not allocate data\n");
+          for (j = 0; j < i - 1; j++)
+            kfree(device->data[j]);
+          vfree(device->data);
+          return -ENOMEM;
+        }
+
+        memset(device->data[i], 0, PAGE_SIZE);
+        if (i % 100000 == 0)
+          pr_info("rmem: allocated %dth page\n", i);
+      }
+
+
       device->size = npages * PAGE_SIZE;
       spin_lock_init(&(device->lock));
       spin_lock_init(&(device->rdma_lock));
@@ -275,7 +361,7 @@ out:
 
 static void __exit rmem_exit(void)
 {
-  int c;
+  int c, i;
   for(c = 0; c < DEVICE_BOUND; c++) {
     if(devices[c] != NULL){
       del_gendisk(devices[c]->gd);
@@ -285,6 +371,12 @@ static void __exit rmem_exit(void)
       blk_cleanup_queue(devices[c]->gd->queue);
 
       rdma_exit(devices[c]->rdma_ctx);
+
+      for (i = 0; i < npages; i++)
+        kfree(devices[c]->data[i]);
+      vfree(devices[c]->data);
+      
+      vfree(devices[c]);
       devices[c] = NULL;
     }
   }

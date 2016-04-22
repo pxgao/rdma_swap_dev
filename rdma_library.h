@@ -20,6 +20,7 @@ typedef struct rdma_request
     u64 dma_addr;
     uint32_t remote_offset;
     int length;
+    struct request *blk_req; 
 } rdma_request;
 
 u64 rdma_map_address(void* addr, int length);
