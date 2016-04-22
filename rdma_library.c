@@ -60,17 +60,10 @@ struct rdma_ctx {
     atomic_t comp_handler_count;
 };
 
-//struct rdma_req_t {
-//    void* local;
-//    void* remote;
-//    int length;
-//    bool rw;
-//};
 
 static struct ib_device_singleton {
     struct ib_device_attr mlnx_device_attr;
     struct ib_client ibclient;
-    //bool ib_device_initialized;
     bool ready_to_use;
     struct ib_device* dev;
     struct ib_event_handler ieh;
@@ -669,44 +662,11 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
     return 0;
 }
 
-/*
-int post_write_wr(rdma_ctx_t ctx, u64 local_addr, uint32_t remote_offset, int length)
-{
-    int retval, i;
-    struct ib_send_wr* bad_wr;
-    struct ib_send_wr wr;
-    //LOG_KERN(LOG_INFO, "post_write_wr()0");
-    //wr = kmalloc(sizeof(*wr), GFP_KERNEL);
-
-    LOG_KERN(LOG_INFO, "post_write_wr()");
-    wr = build_wr(ctx, RDMA_WRITE, local_addr, remote_offset, length);
-    LOG_KERN(LOG_INFO, "ib_post_send()");
-    retval = ib_post_send(ctx->qp, &wr, &bad_wr);
-    if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);    
-    return 0;
-}
-
-int post_read_wr(rdma_ctx_t ctx, u64 local_addr, uint32_t remote_offset, int length)
-{
-    int retval;
-    struct ib_send_wr* bad_wr;
-    struct ib_send_wr wr;
-    wr = build_wr(ctx, RDMA_READ, local_addr, remote_offset, length);
-
-    retval = ib_post_send(ctx->qp, &wr, &bad_wr);
-    if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);     
-    return 0;
-}
-*/
 int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 {
     int i, ret = 0;
     struct rdma_ctx* ctx = ct;
 
-    //BUG_ON(atomic_read(&ctx->operation_count));
-    //atomic_inc(&ctx->operation_count);
 
     
     LOG_KERN(LOG_INFO, "rdma op with %d reqs, pid %d, cpu %d", n_requests, current->pid, smp_processor_id());
@@ -730,15 +690,6 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
     // wait until all requests are done
 
-    poll_cq(ctx);
-
-    //ret = wait_event_interruptible(ctx->queue, ctx->outstanding_requests <= 0);
-    //ret = wait_event_interruptible(ctx->queue, (atomic_read(&ctx->outstanding_requests) <= 0));
-    //while (atomic_read(&ctx->outstanding_requests) != 0);
-    //BUG_ON(ret);
-    //LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu, cond = %d", ctx->outstanding_requests, ret);
-
-    //atomic_dec(&ctx->operation_count);
 
     return 0;
 }
