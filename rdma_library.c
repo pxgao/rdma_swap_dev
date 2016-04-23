@@ -447,75 +447,24 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
     LOG_KERN(LOG_INFO, "OMG. This function is called........\n");
 }
 
-
-/*
-static void comp_handler_send(struct ib_cq* cq, void* cq_context)
-{
-    struct ib_wc wc;
-    int ret;
-    rdma_ctx_t ctx = (rdma_ctx_t)cq_context;
-
-    //BUG_ON(atomic_read(&ctx->comp_handler_count));
-    //atomic_inc(&ctx->comp_handler_count);
-
-   
- 
-    LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
-
-    do {
-        while (ib_poll_cq(cq, 1, &wc)> 0) {
-            if (wc.status == IB_WC_SUCCESS) {
-                LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
-                            (unsigned long long)wc.wr_id,
-                            wc.opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                            wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                            "other", (unsigned) wc.byte_len);
-                ctx->outstanding_requests--;
-                //atomic_dec(&ctx->outstanding_requests);
-            } else {
-                LOG_KERN(LOG_INFO, "FAILURE %d", wc.status);
-            }
-        }
-        ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
-        if (ret < 0) {
-            LOG_KERN(LOG_INFO, "ib_req_notify_cq < 0, ret = %d", ret);
-        //    ctx->outstanding_requests = 0;
-        }
-    } while (ret > 0);
-
-    //LOG_KERN(LOG_INFO, "outstanding_requests %lu", atomic_read(&ctx->outstanding_requests));
-    if (ctx->outstanding_requests <= 0){
-    //if (atomic_read(&ctx->outstanding_requests) <= 0){
-        wake_up_interruptible(&ctx->queue);
-    }
-    //atomic_dec(&ctx->comp_handler_count);
-}
-*/
-
 static void poll_cq(rdma_ctx_t ctx)
 {
     struct ib_wc wc[10];
     struct ib_cq* cq = ctx->send_cq;
-    int ret, count, i;
+    int count, i;
     
-
-    //BUG_ON(atomic_read(&ctx->comp_handler_count));
-    //atomic_inc(&ctx->comp_handler_count);
-
-   
- 
     LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
 
     do {
-        while ((count = ib_poll_cq(cq, 16, wc))> 0) {
+        while ((count = ib_poll_cq(cq, 10, wc))> 0) {
             for(i = 0; i < count; i++){
                 if (wc[i].status == IB_WC_SUCCESS) {
                     LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
                             (unsigned long long)wc[i].wr_id,
                             wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                            wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                            "other", (unsigned) wc[i].byte_len);
-                    //atomic_dec(&ctx->outstanding_requests);
+                            wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" 
+                               :"other", (unsigned) wc[i].byte_len);
+                        //atomic_dec(&ctx->outstanding_requests);
                 } else {
                     LOG_KERN(LOG_INFO, "FAILURE %d", wc[i].status);
                 }
@@ -655,7 +604,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
     sg.lkey     = ctx->mr->lkey;
 
     memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = atomic64_inc_return(&ctx->wr_count);
+    wr.wr_id      = 0;//atomic64_inc_return(&ctx->wr_count);
     wr.sg_list    = &sg;
     wr.num_sge    = 1;
     wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
@@ -665,81 +614,34 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
 
     retval = ib_post_send(ctx->qp, &wr, &bad_wr);
     if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);
+        LOG_KERN(LOG_INFO, "Error posting request, msg %d", retval);
     return 0;
 }
 
-/*
-int post_write_wr(rdma_ctx_t ctx, u64 local_addr, uint32_t remote_offset, int length)
-{
-    int retval, i;
-    struct ib_send_wr* bad_wr;
-    struct ib_send_wr wr;
-    //LOG_KERN(LOG_INFO, "post_write_wr()0");
-    //wr = kmalloc(sizeof(*wr), GFP_KERNEL);
 
-    LOG_KERN(LOG_INFO, "post_write_wr()");
-    wr = build_wr(ctx, RDMA_WRITE, local_addr, remote_offset, length);
-    LOG_KERN(LOG_INFO, "ib_post_send()");
-    retval = ib_post_send(ctx->qp, &wr, &bad_wr);
-    if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);    
-    return 0;
-}
-
-int post_read_wr(rdma_ctx_t ctx, u64 local_addr, uint32_t remote_offset, int length)
-{
-    int retval;
-    struct ib_send_wr* bad_wr;
-    struct ib_send_wr wr;
-    wr = build_wr(ctx, RDMA_READ, local_addr, remote_offset, length);
-
-    retval = ib_post_send(ctx->qp, &wr, &bad_wr);
-    if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);     
-    return 0;
-}
-*/
 int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 {
-    int i, ret = 0;
+    int i;
     struct rdma_ctx* ctx = ct;
 
-    //BUG_ON(atomic_read(&ctx->operation_count));
-    //atomic_inc(&ctx->operation_count);
 
     
     LOG_KERN(LOG_INFO, "rdma op with %d reqs, pid %d, cpu %d", n_requests, current->pid, smp_processor_id());
     ctx->outstanding_requests = n_requests;
-    //atomic_set(&ctx->outstanding_requests, n_requests);
     for (i = 0; i < n_requests; ++i) {
-        if (req[i].rw == RDMA_READ) {
-            LOG_KERN(LOG_INFO, "Posting read req");
-            send_wr((rdma_ctx_t)ctx, RDMA_READ, req[i].dma_addr, req[i].remote_offset, req[i].length);
-        } else if (req[i].rw == RDMA_WRITE) {
-            LOG_KERN(LOG_INFO, "Posting write req");
-            send_wr((rdma_ctx_t)ctx, RDMA_WRITE, req[i].dma_addr, req[i].remote_offset, req[i].length);
+        if (req[i].rw == RDMA_READ || req[i].rw == RDMA_WRITE) {
+            LOG_KERN(LOG_INFO, "Posting req");
+            send_wr((rdma_ctx_t)ctx, req[i].rw, req[i].dma_addr, req[i].remote_offset, req[i].length);
         } else {
             LOG_KERN(LOG_INFO, "Wrong op", 0);
             ctx->outstanding_requests = 0;
-            //atomic_set(&ctx->outstanding_requests, 0);
             return -1;
         }
     }
 
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
-    // wait until all requests are done
 
     poll_cq(ctx);
-
-    //ret = wait_event_interruptible(ctx->queue, ctx->outstanding_requests <= 0);
-    //ret = wait_event_interruptible(ctx->queue, (atomic_read(&ctx->outstanding_requests) <= 0));
-    //while (atomic_read(&ctx->outstanding_requests) != 0);
-    //BUG_ON(ret);
-    //LOG_KERN(LOG_INFO, "All request done. Outstanding req = %lu, cond = %d", ctx->outstanding_requests, ret);
-
-    //atomic_dec(&ctx->operation_count);
-
     return 0;
 }
 
