@@ -491,35 +491,23 @@ static void poll_cq(rdma_ctx_t ctx)
     struct ib_cq* cq = ctx->send_cq;
     int ret, count, i;
     
-
-    //BUG_ON(atomic_read(&ctx->comp_handler_count));
-    //atomic_inc(&ctx->comp_handler_count);
-
-   
- 
-    LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
+    //LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
 
     do {
-        while ((count = ib_poll_cq(cq, 16, wc))> 0) {
+        while ((count = ib_poll_cq(cq, 10, wc))> 0) {
             for(i = 0; i < count; i++){
                 if (wc[i].status == IB_WC_SUCCESS) {
-                    LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
-                            (unsigned long long)wc[i].wr_id,
-                            wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                            wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                            "other", (unsigned) wc[i].byte_len);
-                    //atomic_dec(&ctx->outstanding_requests);
+                    //LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
+                    //        (unsigned long long)wc[i].wr_id,
+                    //        wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
+                    //        wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
+                    //        "other", (unsigned) wc[i].byte_len);
                 } else {
                     LOG_KERN(LOG_INFO, "FAILURE %d", wc[i].status);
                 }
                 ctx->outstanding_requests--;
             }
         }
-        /*ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
-        if (ret < 0) {
-            LOG_KERN(LOG_INFO, "ib_req_notify_cq < 0, ret = %d", ret);
-            ctx->outstanding_requests = 0;
-        }*/
     } while ( ctx->outstanding_requests > 0);
 
 }
@@ -674,10 +662,8 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     //atomic_set(&ctx->outstanding_requests, n_requests);
     for (i = 0; i < n_requests; ++i) {
         if (req[i].rw == RDMA_READ) {
-            LOG_KERN(LOG_INFO, "Posting read req");
             send_wr((rdma_ctx_t)ctx, RDMA_READ, req[i].dma_addr, req[i].remote_offset, req[i].length);
         } else if (req[i].rw == RDMA_WRITE) {
-            LOG_KERN(LOG_INFO, "Posting write req");
             send_wr((rdma_ctx_t)ctx, RDMA_WRITE, req[i].dma_addr, req[i].remote_offset, req[i].length);
         } else {
             LOG_KERN(LOG_INFO, "Wrong op", 0);
@@ -689,7 +675,7 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
     // wait until all requests are done
-
+    poll_cq(ctx);
 
     return 0;
 }
