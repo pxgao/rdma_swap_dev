@@ -71,7 +71,7 @@ static void rmem_request(struct request_queue *q)
   struct request *req;
   rdma_req_t rdma_req_p;
   rdma_req_t last_rdma_req_p = NULL;
-  int count = 0;
+  int i, ret, count = 0, blk_req_count = 0;
 
 
   LOG_KERN(LOG_INFO, "======New rmem request======", 0);
@@ -107,14 +107,17 @@ static void rmem_request(struct request_queue *q)
       LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
       LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-      //for(i = 0; i < count; i++){
-      //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
-      //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
-      //}
+      for(i = 0; i < count; i++){
+        rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+        LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
+      }
       count = 0;
     }
-    //LOG_KERN(LOG_INFO, ("Done.\n"));
-    if ( ! __blk_end_request_cur(req, 0) ) {
+    //ret = __blk_end_request_cur(req, 0);
+    ret = blk_update_request(req, 0, blk_rq_cur_bytes(req)) || (unlikely(blk_bidi_rq(req)) && blk_update_request(req->next_rq, 0, 0));
+    if ( ! ret ) {
+      devices[q->id]->blk_req[blk_req_count++] = req;
+      BUG_ON(blk_req_count >= MAX_REQ);
       req = blk_fetch_request(q);
     }
   }
@@ -122,11 +125,17 @@ static void rmem_request(struct request_queue *q)
     LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
     LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-    //for(i = 0; i < count; i++){
-    //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
-    //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
-    //}
+    for(i = 0; i < count; i++){
+      rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
+      LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
+    }
   }
+  if(blk_req_count)
+  {
+    for(i = 0 ; i < blk_req_count; i++)
+      __blk_end_request_all(devices[q->id]->blk_req[i], 0);
+  }
+
   LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
 }
 
