@@ -48,6 +48,7 @@ module_param(servers, charp, 0);
 #define DEVICE_BOUND 100
 #define MAX_REQ 1024
 #define MERGE_REQ true
+#define REQ_POOL_SIZE 1024
 /*
  * The internal representation of our device.
  */
@@ -59,6 +60,7 @@ struct rmem_device {
   int major_num;
   rdma_ctx_t rdma_ctx;
   rdma_request rdma_req[MAX_REQ];
+  //struct request *blk_req[MAX_REQ];
 };
 
 struct rmem_device* devices[DEVICE_BOUND];
@@ -75,57 +77,94 @@ static void rmem_request(struct request_queue *q)
   rdma_req_t last_rdma_req_p = NULL;
   int ret, i, count = 0;
   unsigned long flags;
-
+  struct batch_request* batch_req, *last_batch_req = NULL;
 
   LOG_KERN(LOG_INFO, "======New rmem request======", 0);
   req = blk_fetch_request(q);
-  while (req != NULL) {
-    if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) {
+  batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
+  batch_req->req = req;
+  batch_req->outstanding_reqs = 0;
+  batch_req->next = NULL;
+  
+
+  while (req != NULL) 
+  {
+    if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) 
+    {
       printk (KERN_NOTICE "Skip non-CMD request\n");
       __blk_end_request_all(req, -EIO);
-      continue;
+      return_batch_request(devices[q->id]->rdma_ctx->pool, batch_req);
+      BUG();
     }
-    rdma_req_p = devices[q->id]->rdma_req + count;
-    
+
+    rdma_req_p = devices[q->id]->rdma_req + count;    
+
     rdma_req_p->rw = rq_data_dir(req)?RDMA_WRITE:RDMA_READ;
     rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
     rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
     rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
-    rdma_req_p->blk_req = req;
-    if(MERGE_REQ && count > 0){
+    rdma_req_p->batch_req = batch_req;
+
+    if(MERGE_REQ && count > 0)
+    {
       last_rdma_req_p = devices[q->id]->rdma_req + count - 1;
       if(rdma_req_p->rw == last_rdma_req_p->rw && 
             last_rdma_req_p->dma_addr + last_rdma_req_p->length == rdma_req_p->dma_addr &&
             last_rdma_req_p->remote_offset + last_rdma_req_p->length == rdma_req_p->remote_offset)
       {
         last_rdma_req_p->length += rdma_req_p->length;
-        LOG_KERN(LOG_INFO, "Merging RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
+        //LOG_KERN(LOG_INFO, "Merging RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
       }
       else
       {
-        LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
+        //LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
         count++;
+        batch_req->outstanding_reqs++;
       }
-    }else{
-      LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
-      count++;
     }
-    if(count >= MAX_REQ){
+    else
+    {
+      //LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
+      count++;
+      batch_req->outstanding_reqs++;
+    }
+    if(count >= MAX_REQ)
+    {
       LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
       rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
-      LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
+      //LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
       //for(i = 0; i < count; i++){
       //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
       //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
       //}
       count = 0;
     }
-    if ( ! __blk_end_request_cur(req, 0) ) {
-      LOG_KERN(LOG_INFO, "-----end of req-----");
+    //ret = __blk_end_request_cur(req, 0);
+    ret = blk_update_request(req, 0, blk_rq_cur_bytes(req)) || (unlikely(blk_bidi_rq(req)) && blk_update_request(req->next_rq, 0, 0));
+    if (!ret)
+    {
+      //devices[q->id]->blk_req[blk_req_count++] = req;
+      //__blk_end_request_all(req, 0);
+      LOG_KERN(LOG_INFO, "-----end of req----- batch id %d sz %d", batch_req->id, batch_req->outstanding_reqs);
+      if(batch_req->outstanding_reqs == 0)
+      {
+        last_batch_req->next = batch_req;
+        LOG_KERN(LOG_INFO, "batch req %d -> %d", last_batch_req->id, batch_req->id);
+      }
+
       req = blk_fetch_request(q);
+      if(req)
+      {
+        last_batch_req = batch_req;
+        batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
+        batch_req->req = req;
+        batch_req->outstanding_reqs = 0;
+        batch_req->next = NULL;
+      }
     }
   }
-  if(count) {
+  if(count)
+  {
     LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
     rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
     LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
@@ -134,6 +173,11 @@ static void rmem_request(struct request_queue *q)
     //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
     //}
   }
+
+  //if(blk_req_count){
+  //  for(i = 0; i < blk_req_count; i++)
+  //    __blk_end_request_all(devices[q->id]->blk_req[i], 0);
+  //}
   LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
 }
 
@@ -208,7 +252,7 @@ static int __init rmem_init(void) {
       spin_lock_init(&(device->lock));
       spin_lock_init(&(device->rdma_lock));
     
-      device->rdma_ctx = rdma_init(npages, tmp_srv, port);
+      device->rdma_ctx = rdma_init(npages, tmp_srv, port, REQ_POOL_SIZE);
       if(device->rdma_ctx == NULL){
         pr_info("rdma_init() failed\n");
         goto out;
@@ -254,7 +298,6 @@ static int __init rmem_init(void) {
       add_disk(device->gd);
       set_capacity(device->gd, npages * SECTORS_PER_PAGE);
 
-      //test(device->rdma_ctx);  
       
     }
     else

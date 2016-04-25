@@ -8,6 +8,7 @@
 #include <linux/version.h>
 
 #define RDMA_BUFFER_SIZE (1024*1024)
+#define CQE_SIZE 2048
 
 #define CHECK_MSG_RET(arg, msg, ret) {\
    if ((arg) == 0){\
@@ -25,41 +26,6 @@
 
 extern int initd;
 
-struct rdma_ctx {
-    struct socket *sock;
-   
-    struct ib_cq* send_cq, *recv_cq;
-    struct ib_pd* pd;
-    struct ib_qp* qp;
-    struct ib_qp_init_attr qp_attr;
-    struct ib_mr *mr;
-    int rkey;
-
-    int lid;
-    int qpn;
-    int psn;
-
-    char* rdma_recv_buffer;
-    u64 dma_addr;
-    unsigned long long int rem_mem_size;
-
-    int rem_qpn;
-    int rem_psn;
-    int rem_lid;
-   
-    unsigned long long int rem_vaddr;
-    uint32_t rem_rkey;
-
-    atomic64_t wr_count;
-
-    volatile unsigned long outstanding_requests;
-    //atomic_t outstanding_requests;
-    wait_queue_head_t queue;
-    atomic_t operation_count;
-    wait_queue_head_t queue2;
-    atomic_t comp_handler_count;
-};
-
 
 static struct ib_device_singleton {
     struct ib_device_attr mlnx_device_attr;
@@ -73,6 +39,73 @@ static struct ib_device_singleton {
 
     int lid;
 } rdma_ib_device;
+
+batch_request_pool* get_batch_request_pool(int size)
+{
+    int i;
+    struct batch_request_pool* pool;
+
+    pool = vmalloc(sizeof(*pool));
+    pool->size = size;
+    pool->head = 0;
+    pool->tail = size - 1;
+    spin_lock_init(&pool->lock);
+    pool->data = vmalloc(sizeof(struct batch_request*) * size);
+
+    for(i = 0; i < size; i++){
+        pool->data[i] = vmalloc(sizeof(struct batch_request));
+        pool->data[i]->id = i;
+    }
+    return pool;
+}
+
+void destroy_batch_request_pool(batch_request_pool* pool)
+{
+    int i;
+    for (i = 0; i < pool->size; i++)
+        if (pool->data[i]) vfree(pool->data[i]);
+    vfree(pool->data);
+    vfree(pool);
+}
+
+batch_request* get_batch_request(batch_request_pool* pool)
+{
+    struct batch_request* ret = NULL;
+    spin_lock_irq(&pool->lock);
+    if(pool->head == pool->tail)
+        ret = NULL;//only one left stop
+    else
+    {
+        ret = pool->data[pool->head];
+        pool->data[pool->head] = NULL;
+        pool->head = (pool->head + 1) % pool->size;
+    }
+    spin_unlock_irq(&pool->lock);
+    return ret;
+}
+
+void return_batch_request(batch_request_pool* pool, batch_request* req)
+{
+    int new_tail;
+    spin_lock_irq(&pool->lock);
+    new_tail = (pool->tail + 1) % pool->size;
+    if(new_tail == pool->head)
+    {
+        pr_err("Err: new_tail == head == %d", new_tail);
+        return;
+    }
+    if(pool->data[new_tail])
+    {
+        pr_err("Err: New tail value %p", pool->data[new_tail]);
+        return;
+    }
+    pool->data[new_tail] = req;
+    pool->tail = new_tail;
+    spin_unlock_irq(&pool->lock);
+}
+
+
+
 
 static void async_event_handler(struct ib_event_handler* ieh, struct ib_event *ie)
 {
@@ -435,56 +468,51 @@ static int rdma_setup(rdma_ctx_t ctx)
     return 0;
 }
 
-static void comp_handler_send(struct ib_cq* cq, void* cq_context)
-{
-    LOG_KERN(LOG_INFO, "OMG. This function is called........\n");
-}
 
 
-/*
 static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 {
     struct ib_wc wc;
     int ret;
+    struct batch_request* batch_req, *curr;
     rdma_ctx_t ctx = (rdma_ctx_t)cq_context;
-
-    //BUG_ON(atomic_read(&ctx->comp_handler_count));
-    //atomic_inc(&ctx->comp_handler_count);
-
-   
  
     LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
 
     do {
         while (ib_poll_cq(cq, 1, &wc)> 0) {
             if (wc.status == IB_WC_SUCCESS) {
-                LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
-                            (unsigned long long)wc.wr_id,
-                            wc.opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                            wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                            "other", (unsigned) wc.byte_len);
-                ctx->outstanding_requests--;
-                //atomic_dec(&ctx->outstanding_requests);
+                //LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %p op: %s byte_len: %u",
+                //            (struct batch_request*)wc.wr_id,
+                //            wc.opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
+                //            wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
+                //            "other", (unsigned) wc.byte_len);
+                batch_req = (struct batch_request*)wc.wr_id;
+                batch_req->outstanding_reqs--;
+                //LOG_KERN(LOG_INFO, "id = %d outstanding_reqs = %d", batch_req->id, batch_req->outstanding_reqs);
+                if(batch_req->outstanding_reqs == 0)
+                {
+                    for(curr = batch_req; curr != NULL; curr = curr->next)
+                    {
+                        LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
+                        __blk_end_request_all(curr->req, 0);
+                        return_batch_request(ctx->pool, curr);
+                    }
+                }
             } else {
-                LOG_KERN(LOG_INFO, "FAILURE %d", wc.status);
+                pr_err("FAILURE %d", wc.status);
             }
         }
         ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
         if (ret < 0) {
             LOG_KERN(LOG_INFO, "ib_req_notify_cq < 0, ret = %d", ret);
-        //    ctx->outstanding_requests = 0;
         }
     } while (ret > 0);
 
-    //LOG_KERN(LOG_INFO, "outstanding_requests %lu", atomic_read(&ctx->outstanding_requests));
-    if (ctx->outstanding_requests <= 0){
-    //if (atomic_read(&ctx->outstanding_requests) <= 0){
-        wake_up_interruptible(&ctx->queue);
-    }
-    //atomic_dec(&ctx->comp_handler_count);
 }
-*/
 
+
+/*
 static void poll_cq(rdma_ctx_t ctx)
 {
     struct ib_wc wc[10];
@@ -511,6 +539,7 @@ static void poll_cq(rdma_ctx_t ctx)
     } while ( ctx->outstanding_requests > 0);
 
 }
+*/
 
 void comp_handler_recv(struct ib_cq* cq, void* cq_context)
 {
@@ -533,13 +562,15 @@ int rdma_exit(rdma_ctx_t ctx)
     CHECK_MSG_RET(ctx->sock != 0, "Error releasing socket", -1);
     sock_release(ctx->sock);
 
+    destroy_batch_request_pool(ctx->pool);
+
     memset(ctx, 0, sizeof(struct rdma_ctx));
     kfree(ctx);
 
     return 0;
 }
 
-rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
+rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
 {
     int retval;
     rdma_ctx_t ctx;
@@ -562,9 +593,9 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
    
     // Note that we set the CQ context to our ctx structure 
     ctx->send_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_send, cq_event_handler_send, ctx, 1024, 0);
+            comp_handler_send, cq_event_handler_send, ctx, CQE_SIZE, 0);
     ctx->recv_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_recv, cq_event_handler_recv, ctx, 1024, 0);
+            comp_handler_recv, cq_event_handler_recv, ctx, CQE_SIZE, 0);
     CHECK_MSG_RET(ctx->send_cq != 0, "Error creating CQ", 0);
     CHECK_MSG_RET(ctx->recv_cq != 0, "Error creating CQ", 0);
     
@@ -577,8 +608,8 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
     memset(&ctx->qp_attr, 0, sizeof(struct ib_qp_init_attr));
     ctx->qp_attr.send_cq = ctx->send_cq;
     ctx->qp_attr.recv_cq = ctx->recv_cq;
-    ctx->qp_attr.cap.max_send_wr  = 1024;
-    ctx->qp_attr.cap.max_recv_wr  = 1024;
+    ctx->qp_attr.cap.max_send_wr  = CQE_SIZE;
+    ctx->qp_attr.cap.max_recv_wr  = CQE_SIZE;
     ctx->qp_attr.cap.max_send_sge = 1;
     ctx->qp_attr.cap.max_recv_sge = 1;
     ctx->qp_attr.cap.max_inline_data = 0;
@@ -618,11 +649,13 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
 
     atomic_set(&ctx->operation_count, 0);
     atomic_set(&ctx->comp_handler_count, 0);
+
+    ctx->pool = get_batch_request_pool(mem_pool_size);
     return ctx;
 }
 
 int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
-        int length)
+        int length, struct batch_request* batch_req)
 {
     struct ib_send_wr* bad_wr;
     struct ib_sge sg;
@@ -636,7 +669,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
     sg.lkey     = ctx->mr->lkey;
 
     memset(&wr, 0, sizeof(wr));
-    wr.wr_id      = atomic64_inc_return(&ctx->wr_count);
+    wr.wr_id      = (u64)batch_req;
     wr.sg_list    = &sg;
     wr.num_sge    = 1;
     wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
@@ -646,7 +679,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
 
     retval = ib_post_send(ctx->qp, &wr, &bad_wr);
     if (retval)
-        LOG_KERN(LOG_INFO, "Error posting write request, msg %d", retval);
+        pr_err("Error posting write request, msg %d", retval);
     return 0;
 }
 
@@ -661,10 +694,8 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     ctx->outstanding_requests = n_requests;
     //atomic_set(&ctx->outstanding_requests, n_requests);
     for (i = 0; i < n_requests; ++i) {
-        if (req[i].rw == RDMA_READ) {
-            send_wr((rdma_ctx_t)ctx, RDMA_READ, req[i].dma_addr, req[i].remote_offset, req[i].length);
-        } else if (req[i].rw == RDMA_WRITE) {
-            send_wr((rdma_ctx_t)ctx, RDMA_WRITE, req[i].dma_addr, req[i].remote_offset, req[i].length);
+        if (req[i].rw == RDMA_READ || req[i].rw == RDMA_WRITE) {
+            send_wr((rdma_ctx_t)ctx, req[i].rw, req[i].dma_addr, req[i].remote_offset, req[i].length, req[i].batch_req);
         } else {
             LOG_KERN(LOG_INFO, "Wrong op", 0);
             ctx->outstanding_requests = 0;
@@ -675,7 +706,7 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 
     LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
     // wait until all requests are done
-    poll_cq(ctx);
+    //poll_cq(ctx);
 
     return 0;
 }
