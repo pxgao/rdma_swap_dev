@@ -87,7 +87,7 @@ batch_request* get_batch_request(batch_request_pool* pool)
         BUG_ON(ret == NULL);
         pool->data[pool->head] = NULL;
         pool->head = (pool->head + 1) % pool->size;
-        LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
+    //    LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
     }
     spin_unlock_irq(&pool->lock);
     return ret;
@@ -111,7 +111,7 @@ void return_batch_request(batch_request_pool* pool, batch_request* req)
     }
     pool->data[new_tail] = req;
     pool->tail = new_tail;
-    LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
+    //LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
     spin_unlock_irq(&pool->lock);
 }
 
@@ -547,8 +547,9 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
                         for(curr = batch_req; curr != NULL; curr = curr->next)
                         {
                             LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
-                            debug_pool_remove(ctx->pool, curr->req);
+                            //debug_pool_remove(ctx->pool, curr->req);
                             __blk_end_request_all(curr->req, 0);
+                            //__blk_end_request(curr->req, 0, curr->nsec);
                             return_batch_request(ctx->pool, curr);
                         }
                     }

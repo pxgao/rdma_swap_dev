@@ -10,7 +10,7 @@
 #include <rdma/rdma_cm.h>
 #include <linux/blkdev.h>
 
-#define CUSTOM_MAKE_REQ_FN true
+#define CUSTOM_MAKE_REQ_FN false
 
 typedef struct rdma_ctx* rdma_ctx_t;
 typedef struct rdma_request* rdma_req_t;
@@ -34,6 +34,7 @@ typedef struct batch_request
         struct request * req;
         struct bio *bio;
     };
+    int nsec;
     volatile int outstanding_reqs;
     struct batch_request* next;
 } batch_request;

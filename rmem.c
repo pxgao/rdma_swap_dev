@@ -47,7 +47,7 @@ module_param(servers, charp, 0);
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
-#define MAX_REQ 128
+#define MAX_REQ 1024
 #define MERGE_REQ true
 #define REQ_POOL_SIZE 1024
 /*
@@ -70,7 +70,7 @@ int initd = 0;
 
 static struct proc_dir_entry* proc_entry;
 
-static void rmem_request(struct request_queue *q) 
+static void rmem_request2(struct request_queue *q) 
 {
   struct request *req;
   rdma_req_t rdma_req_p;
@@ -188,6 +188,67 @@ static void rmem_request(struct request_queue *q)
 }
 
 
+static void rmem_request(struct request_queue *q)
+{
+  struct request *req;
+  struct bio *bio;
+  struct bio_vec *bvec;
+  sector_t sector;
+  rdma_req_t cur_rdma_req = NULL;
+  int i,sectors_xferred, rdma_req_count = 0;
+  struct rmem_device *dev = q->queuedata;
+  char* buffer;
+  struct batch_request* batch_req;
+
+  LOG_KERN(LOG_INFO, "======Start of rmem request======");
+
+  while ((req = blk_fetch_request(q)) != NULL) 
+  {
+    if (req->cmd_type != REQ_TYPE_FS) 
+    {
+      printk (KERN_NOTICE "Skip non-fs request\n");
+      __blk_end_request(req, -EIO, blk_rq_cur_bytes(req));
+      continue;
+    }
+       
+
+    batch_req = get_batch_request(dev->rdma_ctx->pool);
+    batch_req->req = req;
+    batch_req->outstanding_reqs = 0;
+    batch_req->next = NULL;
+    batch_req->nsec = 0;
+
+    __rq_for_each_bio(bio, req) 
+    {
+      sector = bio->bi_sector;
+      bio_for_each_segment(bvec, bio, i) 
+      {
+        buffer = __bio_kmap_atomic(bio, i);
+        //sbull_transfer(dev, sector, bio_cur_bytes(bio) >> 9, buffer, bio_data_dir(bio) == WRITE);
+        cur_rdma_req = dev->rdma_req + rdma_req_count;
+        cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
+        cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+        cur_rdma_req->dma_addr = rdma_map_address(buffer, cur_rdma_req->length);
+        cur_rdma_req->remote_offset = sector * KERNEL_SECTOR_SIZE;
+        cur_rdma_req->batch_req = batch_req;
+        LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req->rw == RDMA_WRITE, cur_rdma_req->dma_addr, buffer, cur_rdma_req->remote_offset, cur_rdma_req->length);
+        batch_req->outstanding_reqs++;
+        rdma_req_count++;
+        BUG_ON(rdma_req_count > MAX_REQ);
+
+        sector += bio_cur_bytes(bio) >> 9;
+        __bio_kunmap_atomic(buffer);
+      }
+      batch_req->nsec += bio->bi_size/KERNEL_SECTOR_SIZE;
+    }
+  }
+
+  if(rdma_req_count)
+  {
+    rdma_op(dev->rdma_ctx, dev->rdma_req, rdma_req_count);
+  }  
+  LOG_KERN(LOG_INFO, "======End of rmem request======");
+}
 
 /*
  * The HDIO_GETGEO ioctl is handled in blkdev_ioctl(), which
