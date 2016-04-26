@@ -24,6 +24,7 @@
 #include <net/sock.h>
 #include <linux/socket.h>
 #include <linux/delay.h>
+#include <linux/bio.h>
 
 #include <linux/time.h>
 #include <linux/proc_fs.h>
@@ -46,7 +47,7 @@ module_param(servers, charp, 0);
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
-#define MAX_REQ 1024
+#define MAX_REQ 128
 #define MERGE_REQ true
 #define REQ_POOL_SIZE 1024
 /*
@@ -80,11 +81,15 @@ static void rmem_request(struct request_queue *q)
 
   LOG_KERN(LOG_INFO, "======New rmem request======", 0);
   req = blk_fetch_request(q);
-  batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
-  batch_req->req = req;
-  batch_req->outstanding_reqs = 0;
-  batch_req->next = NULL;
-  
+  if(req)
+  {
+    LOG_KERN(LOG_INFO, "new request %p", req);
+    debug_pool_insert(devices[q->id]->rdma_ctx->pool, req); 
+    batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
+    batch_req->req = req;
+    batch_req->outstanding_reqs = 0;
+    batch_req->next = NULL;
+  }
 
   while (req != NULL) 
   {
@@ -154,6 +159,8 @@ static void rmem_request(struct request_queue *q)
       req = blk_fetch_request(q);
       if(req)
       {
+        LOG_KERN(LOG_INFO, "new request %p", req);
+        debug_pool_insert(devices[q->id]->rdma_ctx->pool, req); 
         last_batch_req = batch_req;
         batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
         batch_req->req = req;
@@ -209,6 +216,66 @@ static struct block_device_operations rmem_ops = {
 };
 
 
+static void rdma_transfer(struct rmem_device
+*dev, unsigned long sector,
+    unsigned long nsect, char *buffer, int write, struct batch_request* batch_req, rdma_request* rdma_reqs)
+{
+  rdma_request* req = rdma_reqs + batch_req->outstanding_reqs;
+  unsigned long offset = sector*KERNEL_SECTOR_SIZE;
+  unsigned long nbytes = nsect*KERNEL_SECTOR_SIZE;
+
+  if ((offset + nbytes) > dev->size) {
+    printk (KERN_NOTICE "Beyond-end write (%ld %ld)\n", offset, nbytes);
+    return;
+  }
+  req->rw = write?RDMA_WRITE:RDMA_READ;
+  req->length = nbytes;
+  req->dma_addr = rdma_map_address(buffer, nbytes);
+  req->remote_offset = offset;
+  req->batch_req = batch_req;
+  batch_req->outstanding_reqs++;
+  BUG_ON(batch_req->outstanding_reqs > MAX_REQ);
+}
+
+static int rdma_xfer_bio(struct rmem_device *dev, struct bio *bio, struct batch_request* batch_req, rdma_request* rdma_reqs)
+{
+  int i;
+  struct bio_vec *bvec;
+  sector_t sector = bio->bi_sector;
+
+  /* Do each segment independently. */
+  bio_for_each_segment(bvec, bio, i) {
+    char *buffer = __bio_kmap_atomic(bio, i);
+    rdma_transfer(dev, sector, bio_cur_bytes(bio) >> 9, buffer, bio_data_dir(bio) == WRITE, batch_req, rdma_reqs);
+    sector += bio_cur_bytes(bio) >> 9;
+    __bio_kunmap_atomic(buffer);
+  }
+  return 0; /* Always "succeed" */
+}
+
+static void rdma_make_request(struct request_queue *q, struct bio *bio)
+{
+  struct rmem_device *dev;
+  int status;
+  struct batch_request* batch_req;
+
+  LOG_KERN(LOG_INFO, "======New rmem request======");
+  dev = q->queuedata;
+
+  batch_req = get_batch_request(dev->rdma_ctx->pool);
+  LOG_KERN(LOG_INFO, "batch req %d", batch_req->id);
+  batch_req->outstanding_reqs = 0;
+  batch_req->next = NULL;
+  batch_req->bio = bio;
+  status = rdma_xfer_bio(dev, bio, batch_req, dev->rdma_req);
+
+  rdma_op(dev->rdma_ctx, dev->rdma_req, batch_req->outstanding_reqs);
+  LOG_KERN(LOG_INFO, "======End of rmem request======");
+
+}
+
+
+
 static int debug_show(struct seq_file *m, void *v)
 {
   int i,j;
@@ -227,13 +294,18 @@ static int debug_show(struct seq_file *m, void *v)
           reqs[devices[i]->rdma_ctx->pool->data[j]->id] = devices[i]->rdma_ctx->pool->data[j];
         }
       }
-      spin_unlock_irq(&devices[i]->rdma_ctx->pool->lock);
       for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
       {
         if(reqs[j] == NULL)
           seq_printf(m, "%d\n", j);
       }
       vfree(reqs);
+      for(j = 0; j < 1024; j++)
+      {
+          if(devices[i]->rdma_ctx->pool->io_req[i])
+              seq_printf(m, "%p\n", devices[i]->rdma_ctx->pool->io_req[i]);
+      }
+      spin_unlock_irq(&devices[i]->rdma_ctx->pool->lock);
     }
   }
   return 0;
@@ -308,9 +380,20 @@ static int __init rmem_init(void) {
       /*
        * Get a request queue.
        */
-      queue = blk_init_queue(rmem_request, &device->lock);
-      if (queue == NULL)
-        goto out_rdma_exit;
+      if(CUSTOM_MAKE_REQ_FN)
+      {
+        queue = blk_alloc_queue(GFP_KERNEL);
+        if (queue == NULL)
+          goto out_rdma_exit;
+        blk_queue_make_request(queue, rdma_make_request);
+      }
+      else
+      {
+        queue = blk_init_queue(rmem_request, &device->lock);
+        if (queue == NULL)
+          goto out_rdma_exit;
+      }
+      queue->queuedata = device;
       pr_info("init queue id %d\n", queue->id);
       if (queue->id >= DEVICE_BOUND) 
         goto out_rdma_exit;

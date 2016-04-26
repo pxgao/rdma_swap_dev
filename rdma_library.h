@@ -10,6 +10,8 @@
 #include <rdma/rdma_cm.h>
 #include <linux/blkdev.h>
 
+#define CUSTOM_MAKE_REQ_FN true
+
 typedef struct rdma_ctx* rdma_ctx_t;
 typedef struct rdma_request* rdma_req_t;
 
@@ -27,13 +29,19 @@ typedef struct rdma_request
 typedef struct batch_request
 {
     int id;
-    struct request * req;
+    union
+    {
+        struct request * req;
+        struct bio *bio;
+    };
     volatile int outstanding_reqs;
     struct batch_request* next;
 } batch_request;
 
 typedef struct batch_request_pool
 {
+    struct request** io_req;
+
     struct batch_request** data;
     int size;
     int head;
@@ -82,6 +90,10 @@ batch_request_pool* get_batch_request_pool(int size);
 void destroy_batch_request_pool(batch_request_pool* pool);
 batch_request* get_batch_request(batch_request_pool* pool);
 void return_batch_request(batch_request_pool* pool, batch_request* req);
+
+void debug_pool_insert(struct batch_request_pool* pool, struct request* req);
+void debug_pool_remove(struct batch_request_pool* pool, struct request* req);
+
 
 u64 rdma_map_address(void* addr, int length);
 void rdma_unmap_address(u64 addr, int length);
