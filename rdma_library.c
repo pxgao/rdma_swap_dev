@@ -8,7 +8,7 @@
 #include <linux/version.h>
 
 #define RDMA_BUFFER_SIZE (1024*1024)
-#define CQE_SIZE 2048
+#define CQE_SIZE 4096
 
 #define CHECK_MSG_RET(arg, msg, ret) {\
    if ((arg) == 0){\

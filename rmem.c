@@ -67,8 +67,7 @@ struct rmem_device* devices[DEVICE_BOUND];
 
 int initd = 0;
 
-
-
+static struct proc_dir_entry* proc_entry;
 
 static void rmem_request(struct request_queue *q) 
 {
@@ -210,6 +209,55 @@ static struct block_device_operations rmem_ops = {
 };
 
 
+static int debug_show(struct seq_file *m, void *v)
+{
+  int i,j;
+  struct batch_request** reqs;
+  for(i = 0; i < DEVICE_BOUND; i++)
+  {
+    if(devices[i]){
+      seq_printf(m, "-----Found device %d-----\n", i);
+      spin_lock_irq(&devices[i]->rdma_ctx->pool->lock);
+      reqs = vmalloc(sizeof(batch_request*) * devices[i]->rdma_ctx->pool->size);
+      memset(reqs, 0, sizeof(batch_request*) * devices[i]->rdma_ctx->pool->size);
+      for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
+      {
+        if(devices[i]->rdma_ctx->pool->data[j])
+        {
+          reqs[devices[i]->rdma_ctx->pool->data[j]->id] = devices[i]->rdma_ctx->pool->data[j];
+        }
+      }
+      spin_unlock_irq(&devices[i]->rdma_ctx->pool->lock);
+      for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
+      {
+        if(reqs[j] == NULL)
+          seq_printf(m, "%d\n", j);
+      }
+      vfree(reqs);
+    }
+  }
+  return 0;
+}
+
+static int debug_open(struct inode * sp_inode, struct file *sp_file)
+{
+  return single_open(sp_file, debug_show, NULL);
+}
+
+static ssize_t debug_write(struct file *sp_file, const char __user *buf, size_t size, loff_t *offset)
+{
+  LOG_KERN(LOG_INFO, "debug");
+  return 0;
+}
+
+static struct file_operations debug_fops = {
+  .open = debug_open,
+  .read = seq_read,
+  .write = debug_write,
+  .llseek = seq_lseek,
+  .release = single_release
+};
+
 static int __init rmem_init(void) {
   int c,major_num,i;
   struct rmem_device* device;
@@ -304,6 +352,10 @@ static int __init rmem_init(void) {
       break;
   }
   initd = 1;
+
+  proc_entry = proc_create("rmem_debug", 0666, NULL, &debug_fops);
+
+
   pr_info("rmem_rdma successfully loaded!\n");
   return 0;
 
@@ -342,6 +394,9 @@ static void __exit rmem_exit(void)
     }
   }
   rdma_library_exit();
+  
+  remove_proc_entry("rmem_debug", NULL);
+
   pr_info("rmem: bye!\n");
 }
 
