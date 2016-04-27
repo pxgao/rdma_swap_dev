@@ -200,7 +200,7 @@ static void rmem_request(struct request_queue *q)
   char* buffer;
   struct batch_request* batch_req = NULL, *last_batch_req;
 
-  LOG_KERN(LOG_INFO, "======Start of rmem request======");
+  LOG_KERN(LOG_INFO, "=======Start of rmem request======");
 
   while ((req = blk_fetch_request(q)) != NULL) 
   {
