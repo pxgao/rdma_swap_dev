@@ -40,6 +40,116 @@ static struct ib_device_singleton {
     int lid;
 } rdma_ib_device;
 
+batch_request_pool* get_batch_request_pool(int size)
+{
+    int i;
+    struct batch_request_pool* pool;
+
+    pool = vmalloc(sizeof(*pool));
+    pool->size = size;
+    pool->head = 0;
+    pool->tail = size - 1;
+    spin_lock_init(&pool->lock);
+    pool->data = vmalloc(sizeof(struct batch_request*) * size);
+
+    pool->io_req = vmalloc(sizeof(struct request*) * 1024);
+    memset(pool->io_req, 0, sizeof(struct request*) * 1024);
+
+    for(i = 0; i < size; i++){
+        pool->data[i] = vmalloc(sizeof(struct batch_request));
+        pool->data[i]->id = i;
+    }
+    return pool;
+}
+
+void destroy_batch_request_pool(batch_request_pool* pool)
+{
+    int i;
+    for (i = 0; i < pool->size; i++)
+        if (pool->data[i]) vfree(pool->data[i]);
+    vfree(pool->data);
+    vfree(pool->io_req);
+    vfree(pool);
+}
+
+batch_request* get_batch_request(batch_request_pool* pool)
+{
+    struct batch_request* ret = NULL;
+    spin_lock_irq(&pool->lock);
+    if(pool->head == pool->tail)
+    {
+        pr_err("Pool is almost empty");
+        ret = NULL;
+    }
+    else
+    {
+        ret = pool->data[pool->head];
+        BUG_ON(ret == NULL);
+        pool->data[pool->head] = NULL;
+        pool->head = (pool->head + 1) % pool->size;
+    //    LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
+    }
+    spin_unlock_irq(&pool->lock);
+    return ret;
+}
+
+void return_batch_request(batch_request_pool* pool, batch_request* req)
+{
+    int new_tail;
+    BUG_ON(req == NULL);
+    spin_lock_irq(&pool->lock);
+    new_tail = (pool->tail + 1) % pool->size;
+    if(new_tail == pool->head)
+    {
+        pr_err("Err: new_tail == head == %d", new_tail);
+        return;
+    }
+    if(pool->data[new_tail])
+    {
+        pr_err("Err: New tail value %p", pool->data[new_tail]);
+        return;
+    }
+    pool->data[new_tail] = req;
+    pool->tail = new_tail;
+    //LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
+    spin_unlock_irq(&pool->lock);
+}
+
+void debug_pool_insert(struct batch_request_pool* pool, struct request* req)
+{
+    int i, free = -1;
+
+    spin_lock_irq(&pool->lock);
+    for (i = 0; i < 1024; i++)
+    {
+        BUG_ON(pool->io_req[i] == req);
+        if(pool->io_req[i] == 0)
+            free = i;
+    }
+    BUG_ON(free == -1);
+    LOG_KERN(LOG_INFO, "insert req %p at loc %d", req, free);
+    pool->io_req[free] = req;
+    spin_unlock_irq(&pool->lock);
+}
+
+void debug_pool_remove(struct batch_request_pool* pool, struct request* req)
+{
+    int i, free = -1;
+
+    spin_lock_irq(&pool->lock);
+    for (i = 0; i < 1024; i++)
+    {
+        if(pool->io_req[i] == req)
+        {
+            LOG_KERN(LOG_INFO, "removing req %p at loc %d", req, i);
+            pool->io_req[i] = NULL;
+            spin_unlock_irq(&pool->lock);
+            return;
+        }
+    }
+    BUG();
+}
+
 
 static void async_event_handler(struct ib_event_handler* ieh, struct ib_event *ie)
 {
