@@ -47,6 +47,7 @@ module_param(servers, charp, 0);
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
+#define REQ_ARR_SIZE 10
 #define MAX_REQ 1024
 #define MERGE_REQ true
 #define REQ_POOL_SIZE 1024
@@ -57,10 +58,13 @@ struct rmem_device {
   unsigned long size;
   spinlock_t lock;
   spinlock_t rdma_lock;
+  spinlock_t arr_lock; 
   struct gendisk *gd;
   int major_num;
   rdma_ctx_t rdma_ctx;
-  rdma_request rdma_req[MAX_REQ];
+  rdma_request *rdma_req[REQ_ARR_SIZE];
+  volatile int head;
+  volatile int tail;
   //struct request *blk_req[MAX_REQ];
 };
 
@@ -69,6 +73,48 @@ struct rmem_device* devices[DEVICE_BOUND];
 int initd = 0;
 
 static struct proc_dir_entry* proc_entry;
+
+struct rdma_request* get_rdma_request_arr(struct rmem_device* dev)
+{
+    struct rdma_request* ret = NULL;
+    spin_lock(&dev->arr_lock);
+    if(dev->head == dev->tail)
+    {
+        pr_err("Pool is almost empty");
+        BUG();
+    }
+    else
+    {
+        ret = dev->rdma_req[dev->head];
+        BUG_ON(ret == NULL);
+        dev->rdma_req[dev->head] = NULL;
+        dev->head = (dev->head + 1) % REQ_ARR_SIZE;
+    }
+    spin_unlock(&dev->arr_lock);
+    return ret;
+}
+
+void return_rdma_request_arr(struct rmem_device* pool, rdma_request* req)
+{
+    int new_tail;
+    BUG_ON(req == NULL);
+    spin_lock(&pool->arr_lock);
+    new_tail = (pool->tail + 1) % REQ_ARR_SIZE;
+    if(new_tail == pool->head)
+    {
+        pr_err("Err: new_tail == head == %d", new_tail);
+        BUG();
+    }
+    if(pool->rdma_req[new_tail])
+    {
+        pr_err("Err: New tail value %p", pool->rdma_req[new_tail]);
+        BUG();
+    }
+    pool->rdma_req[new_tail] = req;
+    pool->tail = new_tail;
+    spin_unlock(&pool->arr_lock);
+}
+
 /*
 static void rmem_request2(struct request_queue *q) 
 {
@@ -202,7 +248,7 @@ static void rmem_request(struct request_queue *q)
   rdma_request *rdma_req;
 
   LOG_KERN(LOG_INFO, "alloc");
-  rdma_req = vmalloc(sizeof(rdma_request) * MAX_REQ);
+  rdma_req = get_rdma_request_arr(dev);
 
 
   LOG_KERN(LOG_INFO, "=======Start of rmem request======");
@@ -275,7 +321,7 @@ static void rmem_request(struct request_queue *q)
   {
     rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
   } 
-  vfree(rdma_req);
+  return_rdma_request_arr(dev, rdma_req);
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
 
@@ -305,7 +351,7 @@ static struct block_device_operations rmem_ops = {
   .getgeo = rmem_getgeo
 };
 
-
+/*
 static void rdma_transfer(struct rmem_device
 *dev, unsigned long sector,
     unsigned long nsect, char *buffer, int write, struct batch_request* batch_req, rdma_request* rdma_reqs)
@@ -333,14 +379,13 @@ static int rdma_xfer_bio(struct rmem_device *dev, struct bio *bio, struct batch_
   struct bio_vec *bvec;
   sector_t sector = bio->bi_sector;
 
-  /* Do each segment independently. */
   bio_for_each_segment(bvec, bio, i) {
     char *buffer = __bio_kmap_atomic(bio, i);
     rdma_transfer(dev, sector, bio_cur_bytes(bio) >> 9, buffer, bio_data_dir(bio) == WRITE, batch_req, rdma_reqs);
     sector += bio_cur_bytes(bio) >> 9;
     __bio_kunmap_atomic(buffer);
   }
-  return 0; /* Always "succeed" */
+  return 0; 
 }
 
 static void rdma_make_request(struct request_queue *q, struct bio *bio)
@@ -363,7 +408,7 @@ static void rdma_make_request(struct request_queue *q, struct bio *bio)
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 
 }
-
+*/
 
 
 static int debug_show(struct seq_file *m, void *v)
@@ -459,8 +504,14 @@ static int __init rmem_init(void) {
       
 
       device->size = npages * PAGE_SIZE;
-      spin_lock_init(&(device->lock));
-      spin_lock_init(&(device->rdma_lock));
+      spin_lock_init(&device->lock);
+      spin_lock_init(&device->rdma_lock);
+      spin_lock_init(&device->arr_lock);
+      device->head = 0;
+      device->tail = REQ_ARR_SIZE - 1;
+
+      for(i = 0; i < REQ_ARR_SIZE; i++)
+        device->rdma_req[i] = vmalloc(sizeof(rdma_request) * MAX_REQ);
     
       device->rdma_ctx = rdma_init(npages, tmp_srv, port, REQ_POOL_SIZE);
       if(device->rdma_ctx == NULL){
@@ -472,10 +523,10 @@ static int __init rmem_init(void) {
        */
       if(CUSTOM_MAKE_REQ_FN)
       {
-        queue = blk_alloc_queue(GFP_KERNEL);
-        if (queue == NULL)
-          goto out_rdma_exit;
-        blk_queue_make_request(queue, rdma_make_request);
+        //queue = blk_alloc_queue(GFP_KERNEL);
+        //if (queue == NULL)
+        //  goto out_rdma_exit;
+        //blk_queue_make_request(queue, rdma_make_request);
       }
       else
       {
@@ -562,6 +613,10 @@ static void __exit rmem_exit(void)
 
       rdma_exit(devices[c]->rdma_ctx);
       
+      for(i = 0; i < REQ_ARR_SIZE; i++)
+        if(devices[c]->rdma_req[i])
+          vfree(devices[c]->rdma_req[i]);
+
       vfree(devices[c]);
       devices[c] = NULL;
     }
