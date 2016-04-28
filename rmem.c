@@ -199,6 +199,11 @@ static void rmem_request(struct request_queue *q)
   struct rmem_device *dev = q->queuedata;
   char* buffer;
   struct batch_request* batch_req = NULL, *last_batch_req;
+  rdma_request *rdma_req;
+
+  LOG_KERN(LOG_INFO, "alloc");
+  rdma_req = vmalloc(sizeof(rdma_request) * MAX_REQ);
+
 
   LOG_KERN(LOG_INFO, "=======Start of rmem request======");
 
@@ -214,6 +219,7 @@ static void rmem_request(struct request_queue *q)
 
     last_batch_req = batch_req;
     batch_req = get_batch_request(dev->rdma_ctx->pool);
+    LOG_KERN(LOG_INFO, "obtained batch req %d", batch_req->id);
     batch_req->req = req;
     batch_req->outstanding_reqs = 0;
     batch_req->next = NULL;
@@ -226,14 +232,14 @@ static void rmem_request(struct request_queue *q)
       {
         buffer = __bio_kmap_atomic(bio, i);
         //sbull_transfer(dev, sector, bio_cur_bytes(bio) >> 9, buffer, bio_data_dir(bio) == WRITE);
-        cur_rdma_req = dev->rdma_req + rdma_req_count;
+        cur_rdma_req = rdma_req + rdma_req_count;
         cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
         cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
         cur_rdma_req->dma_addr = rdma_map_address(buffer, cur_rdma_req->length);
         cur_rdma_req->remote_offset = sector * KERNEL_SECTOR_SIZE;
         cur_rdma_req->batch_req = batch_req;
 
-        last_rdma_req = dev->rdma_req + rdma_req_count - 1;
+        last_rdma_req = rdma_req + rdma_req_count - 1;
         if(MERGE_REQ && rdma_req_count > 0 && cur_rdma_req->rw == last_rdma_req->rw && 
             last_rdma_req->dma_addr + last_rdma_req->length == cur_rdma_req->dma_addr &&
             last_rdma_req->remote_offset + last_rdma_req->length == cur_rdma_req->remote_offset)
@@ -243,14 +249,15 @@ static void rmem_request(struct request_queue *q)
         }
         else
         {
-          LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req->rw == RDMA_WRITE, cur_rdma_req->dma_addr, buffer, cur_rdma_req->remote_offset, cur_rdma_req->length);
+          //LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req->rw == RDMA_WRITE, cur_rdma_req->dma_addr, buffer, cur_rdma_req->remote_offset, cur_rdma_req->length);
           batch_req->outstanding_reqs++;
           rdma_req_count++;
         }
-        BUG_ON(rdma_req_count > MAX_REQ);
 
         sector += bio_cur_bytes(bio) >> 9;
         __bio_kunmap_atomic(buffer);
+        BUG_ON(rdma_req_count >= MAX_REQ);
+
       }
       batch_req->nsec += bio->bi_size/KERNEL_SECTOR_SIZE;
     }
@@ -266,8 +273,9 @@ static void rmem_request(struct request_queue *q)
 
   if(rdma_req_count)
   {
-    rdma_op(dev->rdma_ctx, dev->rdma_req, rdma_req_count);
-  }  
+    rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
+  } 
+  vfree(rdma_req);
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
 
@@ -379,7 +387,7 @@ static int debug_show(struct seq_file *m, void *v)
       for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
       {
         if(reqs[j] == NULL)
-          seq_printf(m, "%d\n", j);
+          seq_printf(m, "%d:%d\n", j, devices[i]->rdma_ctx->pool->all[j]->outstanding_reqs);
       }
       vfree(reqs);
       for(j = 0; j < 1024; j++)

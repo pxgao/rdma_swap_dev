@@ -36,13 +36,14 @@ typedef struct batch_request
     };
     int nsec;
     volatile int outstanding_reqs;
-    struct batch_request* next;
+    volatile struct batch_request* next;
 } batch_request;
 
 typedef struct batch_request_pool
 {
     struct request** io_req;
 
+    struct batch_request** all;
     struct batch_request** data;
     int size;
     int head;
