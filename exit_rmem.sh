@@ -7,7 +7,7 @@ do
   done
 done
 
-while [ -n "$(lsmod | grep rmem)" ]
+while [ -n "$(lsmod | grep rmem_rdma)" ]
 do
   rmmod rmem_rdma
 done
