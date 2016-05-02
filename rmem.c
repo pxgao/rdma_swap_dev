@@ -34,8 +34,6 @@
 #include "log.h"
 MODULE_LICENSE("Dual BSD/GPL");
 
-static int npages = 2048 * 1024; 
-module_param(npages, int, 0); 
 
 static char* servers = "localhost:8888";
 module_param(servers, charp, 0);
@@ -282,7 +280,7 @@ static void rmem_request(struct request_queue *q)
         cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
         cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
         cur_rdma_req->dma_addr = rdma_map_address(buffer, cur_rdma_req->length);
-        cur_rdma_req->remote_offset = sector * KERNEL_SECTOR_SIZE;
+        cur_rdma_req->remote_offset = (uint64_t)sector * KERNEL_SECTOR_SIZE;
         cur_rdma_req->batch_req = batch_req;
 
         last_rdma_req = rdma_req + rdma_req_count - 1;
@@ -335,7 +333,7 @@ int rmem_getgeo(struct block_device * block_device, struct hd_geometry * geo) {
 
   /* We have no real geometry, of course, so make something up. */
   //size = device.size * (PAGE_SIZE / KERNEL_SECTOR_SIZE);
-  size = npages * PAGE_SIZE * (PAGE_SIZE / KERNEL_SECTOR_SIZE);
+  size = ((struct rmem_device*)(block_device->bd_queue->queuedata))->size  * PAGE_SIZE * (PAGE_SIZE / KERNEL_SECTOR_SIZE);
   geo->cylinders = (size & ~0x3f) >> 6;
   geo->heads = 4;
   geo->sectors = 16;
@@ -472,10 +470,9 @@ static int __init rmem_init(void) {
   char dev_name[20];
   char *servers_str_p = servers;
   char delim[] = ",:";
-  char* tmp_srv;
-  char* tmp_port;
-  char* tmp_port_end_p;
-  int port;
+  char *tmp_srv, *tmp_port, *tmp_npages;
+  char* tmp_end_p;
+  int port, npages;
 
   for(c = 0; c < DEVICE_BOUND; c++) {
     devices[c] = NULL;
@@ -492,13 +489,19 @@ static int __init rmem_init(void) {
     queue = NULL;
     tmp_srv = strsep(&servers_str_p, delim);
     tmp_port = strsep(&servers_str_p, delim);
-    if (tmp_srv && tmp_port){
-      port = simple_strtol(tmp_port, &tmp_port_end_p, 10);
-      if(tmp_port_end_p == NULL){
+    tmp_npages = strsep(&servers_str_p, delim);
+    if (tmp_srv && tmp_port && tmp_npages){
+      port = simple_strtol(tmp_port, &tmp_end_p, 10);
+      if(tmp_end_p == NULL){
         pr_info("Incorrect port %s\n", tmp_port);
         goto out;
       }
-      pr_info("Connecting to server %s port %d \n", tmp_srv, port);
+      npages = simple_strtol(tmp_npages, &tmp_end_p, 10);
+      if(tmp_end_p == NULL){
+        pr_info("Incorrect npage %s\n", tmp_npages);
+        goto out;
+      }
+      pr_info("Connecting to server %s port %d, requesting %d pages \n", tmp_srv, port, npages);
 
       device = vmalloc(sizeof(*device));
       

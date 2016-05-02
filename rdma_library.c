@@ -712,8 +712,8 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
     return ctx;
 }
 
-int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint32_t remote_offset,
-        int length, struct batch_request* batch_req)
+int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
+        uint length, struct batch_request* batch_req)
 {
     struct ib_send_wr* bad_wr;
     struct ib_sge sg;

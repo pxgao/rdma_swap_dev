@@ -21,8 +21,8 @@ typedef struct rdma_request
 {
     RDMA_OP rw;
     u64 dma_addr;
-    uint32_t remote_offset;
-    int length;
+    uint64_t remote_offset;
+    uint32_t length;
     struct batch_request* batch_req;
 } rdma_request;
 
