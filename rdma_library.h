@@ -9,8 +9,7 @@
 #include <rdma/ib_verbs.h>
 #include <rdma/rdma_cm.h>
 #include <linux/blkdev.h>
-
-#define CUSTOM_MAKE_REQ_FN false
+#include "conf.h"
 
 typedef struct rdma_ctx* rdma_ctx_t;
 typedef struct rdma_request* rdma_req_t;

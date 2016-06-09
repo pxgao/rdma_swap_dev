@@ -1,4 +1,4 @@
-insmod rmem_rdma.ko servers=10.10.49.85:18515:$((2535720));
+insmod rmem_rdma.ko servers=10.10.49.89:18515:$((2535720));
 sleep 1
 mkfs.ext4 `ls /dev/rmem_rdma*` 
 sleep 1
