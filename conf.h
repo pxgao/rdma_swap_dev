@@ -10,4 +10,10 @@
 #define MERGE_REQ true
 #define REQ_POOL_SIZE 1024
 
+#define RDMA_BUFFER_SIZE (1024*1024)
+#define CQE_SIZE 4096
+
+
+#define MEASURE_LATENCY 1
+#define LATENCY_BUCKET 1000
 #endif

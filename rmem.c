@@ -29,7 +29,7 @@
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-
+#include <linux/cpufreq.h>
 #include "rdma_library.h"
 #include "log.h"
 #include "conf.h"
@@ -102,125 +102,6 @@ void return_rdma_request_arr(struct rmem_device* pool, rdma_request* req)
     spin_unlock(&pool->arr_lock);
 }
 
-/*
-static void rmem_request2(struct request_queue *q) 
-{
-  struct request *req;
-  rdma_req_t rdma_req_p;
-  rdma_req_t last_rdma_req_p = NULL;
-  int ret, i, count = 0;
-  unsigned long flags;
-  struct batch_request* batch_req, *last_batch_req = NULL;
-
-  LOG_KERN(LOG_INFO, "======New rmem request======", 0);
-  req = blk_fetch_request(q);
-  if(req)
-  {
-    LOG_KERN(LOG_INFO, "new request %p", req);
-    debug_pool_insert(devices[q->id]->rdma_ctx->pool, req); 
-    batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
-    batch_req->req = req;
-    batch_req->outstanding_reqs = 0;
-    batch_req->next = NULL;
-  }
-
-  while (req != NULL) 
-  {
-    if (req == NULL || (req->cmd_type != REQ_TYPE_FS)) 
-    {
-      printk (KERN_NOTICE "Skip non-CMD request\n");
-      __blk_end_request_all(req, -EIO);
-      return_batch_request(devices[q->id]->rdma_ctx->pool, batch_req);
-      BUG();
-    }
-
-    rdma_req_p = devices[q->id]->rdma_req + count;    
-
-    rdma_req_p->rw = rq_data_dir(req)?RDMA_WRITE:RDMA_READ;
-    rdma_req_p->length = PAGE_SIZE * blk_rq_cur_sectors(req) / SECTORS_PER_PAGE;
-    rdma_req_p->dma_addr = rdma_map_address(bio_data(req->bio), rdma_req_p->length);
-    rdma_req_p->remote_offset = blk_rq_pos(req) / SECTORS_PER_PAGE * PAGE_SIZE;
-    rdma_req_p->batch_req = batch_req;
-
-    if(MERGE_REQ && count > 0)
-    {
-      last_rdma_req_p = devices[q->id]->rdma_req + count - 1;
-      if(rdma_req_p->rw == last_rdma_req_p->rw && 
-            last_rdma_req_p->dma_addr + last_rdma_req_p->length == rdma_req_p->dma_addr &&
-            last_rdma_req_p->remote_offset + last_rdma_req_p->length == rdma_req_p->remote_offset)
-      {
-        last_rdma_req_p->length += rdma_req_p->length;
-        //LOG_KERN(LOG_INFO, "Merging RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, last_rdma_req_p->rw == RDMA_WRITE, last_rdma_req_p->dma_addr, bio_data(req->bio), last_rdma_req_p->remote_offset, last_rdma_req_p->length);
-      }
-      else
-      {
-        //LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
-        count++;
-        batch_req->outstanding_reqs++;
-      }
-    }
-    else
-    {
-      //LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, rdma_req_p->rw == RDMA_WRITE, rdma_req_p->dma_addr, bio_data(req->bio), rdma_req_p->remote_offset, rdma_req_p->length);
-      count++;
-      batch_req->outstanding_reqs++;
-    }
-    if(count >= MAX_REQ)
-    {
-      LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
-      rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
-      //LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-      //for(i = 0; i < count; i++){
-      //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
-      //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
-      //}
-      count = 0;
-    }
-    //ret = __blk_end_request_cur(req, 0);
-    ret = blk_update_request(req, 0, blk_rq_cur_bytes(req)) || (unlikely(blk_bidi_rq(req)) && blk_update_request(req->next_rq, 0, 0));
-    if (!ret)
-    {
-      //devices[q->id]->blk_req[blk_req_count++] = req;
-      //__blk_end_request_all(req, 0);
-      LOG_KERN(LOG_INFO, "-----end of req----- batch id %d sz %d", batch_req->id, batch_req->outstanding_reqs);
-      if(batch_req->outstanding_reqs == 0)
-      {
-        last_batch_req->next = batch_req;
-        LOG_KERN(LOG_INFO, "batch req %d -> %d", last_batch_req->id, batch_req->id);
-      }
-
-      req = blk_fetch_request(q);
-      if(req)
-      {
-        LOG_KERN(LOG_INFO, "new request %p", req);
-        debug_pool_insert(devices[q->id]->rdma_ctx->pool, req); 
-        last_batch_req = batch_req;
-        batch_req = get_batch_request(devices[q->id]->rdma_ctx->pool);
-        batch_req->req = req;
-        batch_req->outstanding_reqs = 0;
-        batch_req->next = NULL;
-      }
-    }
-  }
-  if(count)
-  {
-    LOG_KERN(LOG_INFO, "Sending %d rdma reqs", count);
-    rdma_op(devices[q->id]->rdma_ctx, devices[q->id]->rdma_req, count);
-    LOG_KERN(LOG_INFO, "Finished %d rdma reqs", count);
-    //for(i = 0; i < count; i++){
-    //  rdma_unmap_address(devices[q->id]->rdma_req[i].dma_addr, devices[q->id]->rdma_req[i].length);
-    //  LOG_KERN(LOG_INFO, "end req %p ret %d", devices[q->id]->rdma_req[i].blk_req, ret);
-    //}
-  }
-
-  //if(blk_req_count){
-  //  for(i = 0; i < blk_req_count; i++)
-  //    __blk_end_request_all(devices[q->id]->blk_req[i], 0);
-  //}
-  LOG_KERN(LOG_INFO, "======End of rmem request======\n", 0);
-}
-*/
-
 static void rmem_request(struct request_queue *q)
 {
   struct request *req;
@@ -233,6 +114,7 @@ static void rmem_request(struct request_queue *q)
   char* buffer;
   struct batch_request* batch_req = NULL, *last_batch_req;
   rdma_request *rdma_req;
+  bool first_req = true;
 
   LOG_KERN(LOG_INFO, "alloc");
   rdma_req = get_rdma_request_arr(dev);
@@ -257,7 +139,10 @@ static void rmem_request(struct request_queue *q)
     batch_req->outstanding_reqs = 0;
     batch_req->next = NULL;
     batch_req->nsec = 0;
-
+#if MEASURE_LATENCY
+    batch_req->first = first_req;
+    first_req = false;
+#endif
     __rq_for_each_bio(bio, req) 
     {
       sector = bio->bi_sector;
@@ -397,8 +282,27 @@ static void rdma_make_request(struct request_queue *q, struct bio *bio)
 }
 */
 
+#if MEASURE_LATENCY
+static int debug_show_latency_dist(struct seq_file *m, void *v)
+{
+  int i,j;
+  for(i = 0; i < DEVICE_BOUND; i++)
+  {
+    if(devices[i])
+    {
+      seq_printf(m, "-----Found device %d display latency-----\n", i);
+      for(j = 0; j < LATENCY_BUCKET; j++)
+      {
+        seq_printf(m, "%d\t%d\n", j, devices[i]->rdma_ctx->pool->latency_dist[j]);
+      }
+    }
+  }
+  return 0;
+}
 
-static int debug_show(struct seq_file *m, void *v)
+#endif
+
+static int debug_show_out_req(struct seq_file *m, void *v)
 {
   int i,j;
   struct batch_request** reqs;
@@ -435,7 +339,11 @@ static int debug_show(struct seq_file *m, void *v)
 
 static int debug_open(struct inode * sp_inode, struct file *sp_file)
 {
-  return single_open(sp_file, debug_show, NULL);
+#if MEASURE_LATENCY
+  return single_open(sp_file, debug_show_latency_dist, NULL);
+#else
+  return single_open(sp_file, debug_show_out_req, NULL);
+#endif
 }
 
 static ssize_t debug_write(struct file *sp_file, const char __user *buf, size_t size, loff_t *offset)
@@ -453,7 +361,7 @@ static struct file_operations debug_fops = {
 };
 
 static int __init rmem_init(void) {
-  int c,major_num,i;
+  int c,major_num,i,ret;
   struct rmem_device* device;
   struct request_queue *queue;
   char dev_name[20];
@@ -467,11 +375,12 @@ static int __init rmem_init(void) {
     devices[c] = NULL;
   }
 
-  pr_info("Start rmem_rdma. rdma_library_init()\n");
-  pr_info("init success? %d\n", rdma_library_init());
+  LOG_KERN(LOG_INFO, "Start rmem_rdma. rdma_library_init() CPU freq %d kHz\n", cpu_khz);
+  ret = rdma_library_init();
+  pr_err("init success? %d\n", ret);
 
   while(!rdma_library_ready());
-  pr_info("init done\n");
+  LOG_KERN(LOG_INFO, "init done\n");
 
 
   while(1){
@@ -490,7 +399,7 @@ static int __init rmem_init(void) {
         pr_info("Incorrect npage %s\n", tmp_npages);
         goto out;
       }
-      pr_info("Connecting to server %s port %d, requesting %d pages \n", tmp_srv, port, npages);
+      pr_err("Connecting to server %s port %d, requesting %d pages \n", tmp_srv, port, npages);
 
       device = vmalloc(sizeof(*device));
       

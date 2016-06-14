@@ -36,7 +36,17 @@ typedef struct batch_request
     int nsec;
     volatile int outstanding_reqs;
     volatile struct batch_request* next;
+#if MEASURE_LATENCY
+    unsigned long long start_time;
+    bool first;
+#endif
 } batch_request;
+
+static inline uint64_t get_cycle(void){
+    unsigned int lo,hi;
+    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
+    return ((uint64_t)hi << 32) | lo;
+}
 
 typedef struct batch_request_pool
 {
@@ -48,6 +58,9 @@ typedef struct batch_request_pool
     int head;
     int tail;
     spinlock_t lock;
+#if MEASURE_LATENCY
+    int latency_dist[LATENCY_BUCKET];
+#endif
 } batch_request_pool;
 
 struct rdma_ctx {

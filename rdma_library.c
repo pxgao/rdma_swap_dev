@@ -6,9 +6,7 @@
 #include <rdma/rdma_cm.h>
 #include <linux/smp.h>
 #include <linux/version.h>
-
-#define RDMA_BUFFER_SIZE (1024*1024)
-#define CQE_SIZE 4096
+#include <linux/cpufreq.h>
 
 #define CHECK_MSG_RET(arg, msg, ret) {\
    if ((arg) == 0){\
@@ -59,6 +57,10 @@ batch_request_pool* get_batch_request_pool(int size)
         pool->data[i] = vmalloc(sizeof(struct batch_request));
         pool->data[i]->id = i;
     }
+
+#if MEASURE_LATENCY
+    memset(pool->latency_dist, 0, sizeof(pool->latency_dist));
+#endif
     return pool;
 }
 
@@ -87,6 +89,9 @@ batch_request* get_batch_request(batch_request_pool* pool)
         BUG_ON(ret == NULL);
         pool->data[pool->head] = NULL;
         pool->head = (pool->head + 1) % pool->size;
+#if MEASURE_LATENCY
+        ret->start_time = get_cycle();
+#endif
     //    LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
     }
     spin_unlock_irq(&pool->lock);
@@ -95,9 +100,17 @@ batch_request* get_batch_request(batch_request_pool* pool)
 
 void return_batch_request(batch_request_pool* pool, batch_request* req)
 {
-    int new_tail;
+    int new_tail,bucket;
     BUG_ON(req == NULL);
     spin_lock_irq(&pool->lock);
+#if MEASURE_LATENCY
+    if(req->first)
+    {
+      bucket = (get_cycle() - req->start_time)*1000/cpu_khz;
+      LOG_KERN(LOG_INFO, "cycle %d, bucket %d", get_cycle() - req->start_time, bucket);
+      pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;
+    }
+#endif
     new_tail = (pool->tail + 1) % pool->size;
     if(new_tail == pool->head)
     {
