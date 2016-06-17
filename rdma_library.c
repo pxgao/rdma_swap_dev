@@ -747,6 +747,33 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
     return ctx;
 }
 
+
+
+int make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
+        u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
+{
+    memset(sg, 0, sizeof(struct ib_sge));
+    sg->addr     = (uintptr_t)dma_addr;
+    sg->length   = length;
+    sg->lkey     = ctx->mr->lkey;
+
+    memset(wr, 0, sizeof(wr));
+#if MODE == MODE_ASYNC
+    wr->wr_id      = (u64)batch_req;
+#elif MODE == MODE_SYNC
+    wr->wr_id      = (u64)get_cycle(); 
+#else
+    BUG();
+#endif
+    wr->sg_list    = sg;
+    wr->num_sge    = 1;
+    wr->opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
+    wr->send_flags = IB_SEND_SIGNALED;
+    wr->wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
+    wr->wr.rdma.rkey        = ctx->rem_rkey;
+}
+
+
 int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
         uint length, struct batch_request* batch_req)
 {
@@ -755,26 +782,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
     struct ib_send_wr wr;
     int retval;
 
-
-    memset(&sg, 0, sizeof(struct ib_sge));
-    sg.addr     = (uintptr_t)dma_addr;
-    sg.length   = length;
-    sg.lkey     = ctx->mr->lkey;
-
-    memset(&wr, 0, sizeof(wr));
-#if MODE == MODE_ASYNC
-    wr.wr_id      = (u64)batch_req;
-#elif MODE == MODE_SYNC
-    wr.wr_id      = (u64)get_cycle(); 
-#else
-    BUG();
-#endif
-    wr.sg_list    = &sg;
-    wr.num_sge    = 1;
-    wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
-    wr.send_flags = IB_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
-    wr.wr.rdma.rkey        = ctx->rem_rkey;
+    make_wr(ctx, &wr, &sg, op, dma_addr, remote_offset, length, batch_req);
 
     retval = ib_post_send(ctx->qp, &wr, &bad_wr);
     if (retval)
