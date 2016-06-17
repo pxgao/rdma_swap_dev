@@ -526,7 +526,7 @@ static int rdma_setup(rdma_ctx_t ctx)
 }
 
 
-
+#if MODE == MODE_ASYNC
 static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 {
     struct ib_wc wc;
@@ -583,34 +583,56 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 }
 
 
-/*
+#elif (MODE == MODE_SYNC)
+static void comp_handler_send(struct ib_cq* cq, void* cq_context)
+{
+    LOG_KERN(LOG_INFO, "OMG. This function is called........\n");
+}
+
+
 static void poll_cq(rdma_ctx_t ctx)
 {
     struct ib_wc wc[10];
     struct ib_cq* cq = ctx->send_cq;
-    int ret, count, i;
-    
-    //LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
+    int count, i, bucket;
+    bool first_rdma_req = true;
+
+    LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
 
     do {
-        while ((count = ib_poll_cq(cq, 10, wc))> 0) {
+        while ((count = ib_poll_cq(cq, 10, wc)) > 0) {
             for(i = 0; i < count; i++){
                 if (wc[i].status == IB_WC_SUCCESS) {
-                    //LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
-                    //        (unsigned long long)wc[i].wr_id,
-                    //        wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                    //        wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                    //        "other", (unsigned) wc[i].byte_len);
+                    LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
+                            (unsigned long long)wc[i].wr_id,
+                            wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
+                            wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" 
+                               :"other", (unsigned) wc[i].byte_len);
+                    #if MEASURE_LATENCY
+                        if(first_rdma_req)
+                        {
+                            first_rdma_req = false;
+                            bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
+                            ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
+                        }                        
+                    #endif
                 } else {
                     LOG_KERN(LOG_INFO, "FAILURE %d", wc[i].status);
                 }
                 ctx->outstanding_requests--;
             }
         }
+        /*ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
+        if (ret < 0) {
+            LOG_KERN(LOG_INFO, "ib_req_notify_cq < 0, ret = %d", ret);
+            ctx->outstanding_requests = 0;
+        }*/
     } while ( ctx->outstanding_requests > 0);
 
 }
-*/
+
+#endif
+
 
 void comp_handler_recv(struct ib_cq* cq, void* cq_context)
 {
@@ -740,7 +762,13 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
     sg.lkey     = ctx->mr->lkey;
 
     memset(&wr, 0, sizeof(wr));
+#if MODE == MODE_ASYNC
     wr.wr_id      = (u64)batch_req;
+#elif MODE == MODE_SYNC
+    wr.wr_id      = (u64)get_cycle(); 
+#else
+    BUG();
+#endif
     wr.sg_list    = &sg;
     wr.num_sge    = 1;
     wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
@@ -780,8 +808,10 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 
     //LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
     // wait until all requests are done
-    //poll_cq(ctx);
 
+#if MODE == MODE_SYNC
+    poll_cq(ctx);
+#endif
     return 0;
 }
 

@@ -25,6 +25,7 @@
 #include <linux/socket.h>
 #include <linux/delay.h>
 #include <linux/bio.h>
+#include <linux/version.h>
 
 #include <linux/time.h>
 #include <linux/proc_fs.h>
@@ -52,7 +53,7 @@ struct rmem_device {
   rdma_request *rdma_req[REQ_ARR_SIZE];
   volatile int head;
   volatile int tail;
-  //struct request *blk_req[MAX_REQ];
+  struct request *blk_req[MAX_REQ];
 };
 
 struct rmem_device* devices[DEVICE_BOUND];
@@ -102,7 +103,7 @@ void return_rdma_request_arr(struct rmem_device* pool, rdma_request* req)
     spin_unlock(&pool->arr_lock);
 }
 
-static void rmem_request(struct request_queue *q)
+static void rmem_request_async(struct request_queue *q)
 {
   struct request *req;
   struct bio *bio;
@@ -196,6 +197,96 @@ static void rmem_request(struct request_queue *q)
   return_rdma_request_arr(dev, rdma_req);
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
+
+
+static void rmem_request_sync(struct request_queue *q)
+{
+  struct request *req;
+  struct bio *bio;
+  #if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+  struct bio_vec *bvec;
+  int iter;
+  #else
+  struct bio_vec bvec;
+  struct bvec_iter iter;
+  #endif
+  sector_t sector;
+  rdma_req_t last_rdma_req, cur_rdma_req = NULL;
+  int i, blk_req_count = 0, rdma_req_count = 0;
+  struct rmem_device *dev = q->queuedata;
+  char* buffer;
+  rdma_request *rdma_req;
+
+  LOG_KERN(LOG_INFO, "=======Start of rmem request======");
+  rdma_req = get_rdma_request_arr(dev);
+
+  while ((req = blk_fetch_request(q)) != NULL) 
+  {
+    if (req->cmd_type != REQ_TYPE_FS) 
+    {
+      printk (KERN_NOTICE "Skip non-fs request\n");
+      __blk_end_request(req, -EIO, blk_rq_cur_bytes(req));
+      continue;
+    }
+
+    dev->blk_req[blk_req_count++] = req;
+
+    __rq_for_each_bio(bio, req) 
+    {
+      #if LINUX_VERSION_CODE < KERNEL_VERSION(3,19,0)
+      sector = bio->bi_sector;
+      #else
+      sector = bio->bi_iter.bi_sector;
+      #endif
+      bio_for_each_segment(bvec, bio, iter) 
+      {
+        buffer = __bio_kmap_atomic(bio, iter);
+        cur_rdma_req = rdma_req + rdma_req_count;
+        cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
+        cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+        cur_rdma_req->dma_addr = rdma_map_address(buffer, cur_rdma_req->length);
+        cur_rdma_req->remote_offset = (uint64_t)sector * KERNEL_SECTOR_SIZE;
+
+        last_rdma_req = rdma_req + rdma_req_count - 1;
+        if(MERGE_REQ && rdma_req_count > 0 && cur_rdma_req->rw == last_rdma_req->rw && 
+            last_rdma_req->dma_addr + last_rdma_req->length == cur_rdma_req->dma_addr &&
+            last_rdma_req->remote_offset + last_rdma_req->length == cur_rdma_req->remote_offset)
+        {
+          last_rdma_req->length += cur_rdma_req->length;
+          LOG_KERN(LOG_INFO, "Merging RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, last_rdma_req->rw == RDMA_WRITE, last_rdma_req->dma_addr, bio_data(req->bio), last_rdma_req->remote_offset, last_rdma_req->length);
+        }
+        else
+        {
+          LOG_KERN(LOG_INFO, "Constructing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req->rw == RDMA_WRITE, cur_rdma_req->dma_addr, buffer, cur_rdma_req->remote_offset, cur_rdma_req->length);
+          rdma_req_count++;
+        }
+        if(rdma_req_count >= MAX_REQ)
+        {
+          rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
+          rdma_req_count = 0;
+        }
+
+        sector += bio_cur_bytes(bio) >> 9;
+        __bio_kunmap_atomic(buffer);
+      }
+    }
+
+  }
+
+  if(rdma_req_count)
+  {
+    rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
+  }
+
+  for(i = 0; i < blk_req_count; i++)
+  {
+    __blk_end_request_all(dev->blk_req[i], 0);
+  }
+  return_rdma_request_arr(dev, rdma_req);
+  LOG_KERN(LOG_INFO, "======End of rmem request======");
+}
+
+
 
 /*
  * The HDIO_GETGEO ioctl is handled in blkdev_ioctl(), which
@@ -431,7 +522,13 @@ static int __init rmem_init(void) {
       }
       else
       {
-        queue = blk_init_queue(rmem_request, &device->lock);
+#if MODE == MODE_SYNC
+        queue = blk_init_queue(rmem_request_sync, &device->lock);
+#elif MODE == MODE_ASYNC
+        queue = blk_init_queue(rmem_request_async, &device->lock);
+#else
+        BUG();
+#endif
         if (queue == NULL)
           goto out_rdma_exit;
       }

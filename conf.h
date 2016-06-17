@@ -1,6 +1,11 @@
 #ifndef _CONF_H_
 #define _CONF_H_
 
+#define MODE_SYNC 1
+#define MODE_ASYNC 2
+#define MODE MODE_SYNC
+
+
 #define CUSTOM_MAKE_REQ_FN false
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
