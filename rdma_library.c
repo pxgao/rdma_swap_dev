@@ -49,6 +49,7 @@ batch_request_pool* get_batch_request_pool(int size)
     pool->tail = size - 1;
     spin_lock_init(&pool->lock);
     pool->data = vmalloc(sizeof(struct batch_request*) * size);
+    pool->all = vmalloc(sizeof(struct batch_request*) * size);
 
     pool->io_req = vmalloc(sizeof(struct request*) * 1024);
     memset(pool->io_req, 0, sizeof(struct request*) * 1024);
@@ -56,6 +57,7 @@ batch_request_pool* get_batch_request_pool(int size)
     for(i = 0; i < size; i++){
         pool->data[i] = vmalloc(sizeof(struct batch_request));
         pool->data[i]->id = i;
+        pool->all[i] = pool->data[i];
     }
 
 #if MEASURE_LATENCY
@@ -132,12 +134,16 @@ void debug_pool_insert(struct batch_request_pool* pool, struct request* req)
 {
     int i, free = -1;
 
+    LOG_KERN(LOG_INFO, "insert req %p", req);
     spin_lock_irq(&pool->lock);
     for (i = 0; i < 1024; i++)
     {
         BUG_ON(pool->io_req[i] == req);
         if(pool->io_req[i] == 0)
+        {
             free = i;
+            break;
+        }
     }
     BUG_ON(free == -1);
     LOG_KERN(LOG_INFO, "insert req %p at loc %d", req, free);
@@ -526,7 +532,7 @@ static int rdma_setup(rdma_ctx_t ctx)
 }
 
 
-#if MODE == MODE_ASYNC
+#if MODE == MODE_ASYNC || MODE == MODE_ONE
 static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 {
     struct ib_wc wc;
@@ -545,29 +551,33 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
                 //            wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
                 //            "other", (unsigned) wc.byte_len);
                 batch_req = (struct batch_request*)wc.wr_id;
-                batch_req->outstanding_reqs--;
                 //LOG_KERN(LOG_INFO, "id = %d outstanding_reqs = %d", batch_req->id, batch_req->outstanding_reqs);
+#if MODE == MODE_ONE
+                batch_req->comp_reqs++;
+                if(batch_req->outstanding_reqs == batch_req->comp_reqs && batch_req->all_request_sent)
+#else
+                batch_req->outstanding_reqs--;
                 if(batch_req->outstanding_reqs == 0)
+#endif
                 {
-                    if(CUSTOM_MAKE_REQ_FN)
-                    {
+                    #if CUSTOM_MAKE_REQ_FN
                         LOG_KERN(LOG_INFO, "returning batch request %d", batch_req->id);
                         bio_endio(batch_req->bio, 0);
                         return_batch_request(ctx->pool, batch_req);
-                    }
-                    else
-                    {
+                    #else
                         for(curr = batch_req; curr != NULL; curr = curr->next)
                         {
                             LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
-                            //debug_pool_remove(ctx->pool, curr->req);
+                            #if DEBUG_OUT_REQ
+                            debug_pool_remove(ctx->pool, curr->req);
+                            #endif
                             spin_lock_irq(curr->req->q->queue_lock);
                             __blk_end_request_all(curr->req, 0);
                             spin_unlock_irq(curr->req->q->queue_lock);
                             //__blk_end_request(curr->req, 0, curr->nsec);
                             return_batch_request(ctx->pool, curr);
                         }
-                    }
+                    #endif
                 }
             } else {
                 pr_err("FAILURE %d", wc.status);
@@ -749,7 +759,7 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
 
 
 
-int make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
+void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
         u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
 {
     memset(sg, 0, sizeof(struct ib_sge));
@@ -757,13 +767,13 @@ int make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op
     sg->length   = length;
     sg->lkey     = ctx->mr->lkey;
 
-    memset(wr, 0, sizeof(wr));
-#if MODE == MODE_ASYNC
+    memset(wr, 0, sizeof(*wr));
+#if MODE == MODE_ASYNC || MODE == MODE_ONE
     wr->wr_id      = (u64)batch_req;
 #elif MODE == MODE_SYNC
     wr->wr_id      = (u64)get_cycle(); 
 #else
-    BUG();
+    #error "Wrong Mode"
 #endif
     wr->sg_list    = sg;
     wr->num_sge    = 1;

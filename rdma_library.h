@@ -36,6 +36,10 @@ typedef struct batch_request
     int nsec;
     volatile int outstanding_reqs;
     volatile struct batch_request* next;
+#if MODE == MODE_ONE
+    volatile bool all_request_sent;
+    volatile int comp_reqs;
+#endif
 #if MEASURE_LATENCY
     unsigned long long start_time;
     bool first;

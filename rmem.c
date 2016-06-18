@@ -103,6 +103,7 @@ void return_rdma_request_arr(struct rmem_device* pool, rdma_request* req)
     spin_unlock(&pool->arr_lock);
 }
 
+#if MODE == MODE_ASYNC
 static void rmem_request_async(struct request_queue *q)
 {
   struct request *req;
@@ -132,6 +133,9 @@ static void rmem_request_async(struct request_queue *q)
       continue;
     }
     spin_unlock_irq(q->queue_lock); 
+    #if DEBUG_OUT_REQ
+    debug_pool_insert(dev->rdma_ctx->pool, req); 
+    #endif
 
     last_batch_req = batch_req;
     batch_req = get_batch_request(dev->rdma_ctx->pool);
@@ -140,10 +144,10 @@ static void rmem_request_async(struct request_queue *q)
     batch_req->outstanding_reqs = 0;
     batch_req->next = NULL;
     batch_req->nsec = 0;
-#if MEASURE_LATENCY
+    #if MEASURE_LATENCY
     batch_req->first = first_req;
     first_req = false;
-#endif
+    #endif
     __rq_for_each_bio(bio, req) 
     {
       sector = bio->bi_sector;
@@ -197,8 +201,9 @@ static void rmem_request_async(struct request_queue *q)
   return_rdma_request_arr(dev, rdma_req);
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
+#endif
 
-
+#if MODE == MODE_SYNC
 static void rmem_request_sync(struct request_queue *q)
 {
   struct request *req;
@@ -285,8 +290,110 @@ static void rmem_request_sync(struct request_queue *q)
   return_rdma_request_arr(dev, rdma_req);
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
+#endif
 
+#if MODE == MODE_ONE
+static void rmem_request_one(struct request_queue *q)
+{
+  struct request *req;
+  struct bio *bio;
+  struct bio_vec *bvec;
+  sector_t sector;
+  rdma_request cur_rdma_req, temp_rdma_req;
+  bool has_req = false;
+  #if MEASURE_LATENCY
+  bool first_req = true;
+  #endif
+  int i;
+  struct rmem_device *dev = q->queuedata;
+  char* buffer;
+  struct batch_request* batch_req = NULL;
 
+  LOG_KERN(LOG_INFO, "======Start of rmem request======");
+
+  while ((req = blk_fetch_request(q)) != NULL) 
+  {
+    if (req->cmd_type != REQ_TYPE_FS) 
+    {
+      printk (KERN_NOTICE "Skip non-fs request\n");
+      __blk_end_request(req, -EIO, blk_rq_cur_bytes(req));
+      continue;
+    }
+    spin_unlock_irq(q->queue_lock); 
+
+    #if DEBUG_OUT_REQ
+    debug_pool_insert(dev->rdma_ctx->pool, req);
+    #endif
+
+    batch_req = get_batch_request(dev->rdma_ctx->pool);
+    batch_req->req = req;
+    batch_req->outstanding_reqs = 0;
+    batch_req->comp_reqs = 0;
+    batch_req->next = NULL;
+    batch_req->nsec = 0;
+    batch_req->all_request_sent = false;
+    #if MEASURE_LATENCY
+    batch_req->first = first_req;
+    first_req = false;
+    #endif
+
+    __rq_for_each_bio(bio, req) 
+    {
+      sector = bio->bi_sector;
+      bio_for_each_segment(bvec, bio, i) 
+      {
+        buffer = __bio_kmap_atomic(bio, i);
+        if(has_req)  
+        {
+          temp_rdma_req.rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
+          temp_rdma_req.length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+          temp_rdma_req.dma_addr = rdma_map_address(buffer, cur_rdma_req.length);
+          temp_rdma_req.remote_offset = sector * KERNEL_SECTOR_SIZE;
+          temp_rdma_req.batch_req = batch_req;
+          
+          if(temp_rdma_req.rw == cur_rdma_req.rw &&
+            cur_rdma_req.dma_addr + cur_rdma_req.length == temp_rdma_req.dma_addr &&
+            cur_rdma_req.remote_offset + cur_rdma_req.length == temp_rdma_req.remote_offset)
+          {
+            cur_rdma_req.length += temp_rdma_req.length;
+            LOG_KERN(LOG_INFO, "Merging RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req.rw == RDMA_WRITE, cur_rdma_req.dma_addr, bio_data(req->bio), cur_rdma_req.remote_offset, cur_rdma_req.length);
+          }
+          else
+          {
+            LOG_KERN(LOG_INFO, "Flushing RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req.rw == RDMA_WRITE, cur_rdma_req.dma_addr, bio_data(req->bio), cur_rdma_req.remote_offset, cur_rdma_req.length);
+            batch_req->outstanding_reqs++;
+            rdma_op(dev->rdma_ctx, &cur_rdma_req, 1);
+            cur_rdma_req = temp_rdma_req;
+          }
+        }
+        else
+        {
+          cur_rdma_req.rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
+          cur_rdma_req.length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+          cur_rdma_req.dma_addr = rdma_map_address(buffer, cur_rdma_req.length);
+          cur_rdma_req.remote_offset = sector * KERNEL_SECTOR_SIZE;
+          cur_rdma_req.batch_req = batch_req;
+          has_req = true;
+          batch_req->outstanding_reqs++;
+          LOG_KERN(LOG_INFO, "New RDMA req %p w: %d  addr: %llu (ptr: %p)  offset: %u  len: %d", req, cur_rdma_req.rw == RDMA_WRITE, cur_rdma_req.dma_addr, bio_data(req->bio), cur_rdma_req.remote_offset, cur_rdma_req.length);
+        }
+
+        sector += bio_cur_bytes(bio) >> 9;
+        __bio_kunmap_atomic(buffer);
+      }
+      batch_req->nsec += bio->bi_size/KERNEL_SECTOR_SIZE;
+    }
+
+    batch_req->all_request_sent = true;
+    rdma_op(dev->rdma_ctx, &cur_rdma_req, 1);
+    
+    has_req = false;
+    spin_lock_irq(q->queue_lock);
+  }
+
+  LOG_KERN(LOG_INFO, "======End of rmem request======");
+}
+#endif
 
 /*
  * The HDIO_GETGEO ioctl is handled in blkdev_ioctl(), which
@@ -391,8 +498,7 @@ static int debug_show_latency_dist(struct seq_file *m, void *v)
   return 0;
 }
 
-#endif
-
+#elif DEBUG_OUT_REQ
 static int debug_show_out_req(struct seq_file *m, void *v)
 {
   int i,j;
@@ -404,6 +510,8 @@ static int debug_show_out_req(struct seq_file *m, void *v)
       spin_lock_irq(&devices[i]->rdma_ctx->pool->lock);
       reqs = vmalloc(sizeof(batch_request*) * devices[i]->rdma_ctx->pool->size);
       memset(reqs, 0, sizeof(batch_request*) * devices[i]->rdma_ctx->pool->size);
+      //put batch_request_pool objects to reqs, index by id
+      seq_printf(m, "Indexing batch_reqs\n");
       for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
       {
         if(devices[i]->rdma_ctx->pool->data[j])
@@ -411,12 +519,16 @@ static int debug_show_out_req(struct seq_file *m, void *v)
           reqs[devices[i]->rdma_ctx->pool->data[j]->id] = devices[i]->rdma_ctx->pool->data[j];
         }
       }
+      //print missing pool object, so they are outgoing batch_reqs
+      seq_printf(m, "Outstanding batch reqs\n");
       for(j = 0; j < devices[i]->rdma_ctx->pool->size; j++)
       {
         if(reqs[j] == NULL)
           seq_printf(m, "%d:%d\n", j, devices[i]->rdma_ctx->pool->all[j]->outstanding_reqs);
       }
       vfree(reqs);
+      //print outgoing block reqs
+      seq_printf(m, "Outstanding block reqs\n");
       for(j = 0; j < 1024; j++)
       {
           if(devices[i]->rdma_ctx->pool->io_req[i])
@@ -427,13 +539,21 @@ static int debug_show_out_req(struct seq_file *m, void *v)
   }
   return 0;
 }
+#else
+static int debug_show_null(struct seq_file *m, void *v)
+{
+  return 0;
+}
+#endif
 
 static int debug_open(struct inode * sp_inode, struct file *sp_file)
 {
 #if MEASURE_LATENCY
   return single_open(sp_file, debug_show_latency_dist, NULL);
-#else
+#elif DEBUG_OUT_REQ
   return single_open(sp_file, debug_show_out_req, NULL);
+#else
+  return single_open(sp_file, debug_show_null, NULL);
 #endif
 }
 
@@ -526,8 +646,10 @@ static int __init rmem_init(void) {
         queue = blk_init_queue(rmem_request_sync, &device->lock);
 #elif MODE == MODE_ASYNC
         queue = blk_init_queue(rmem_request_async, &device->lock);
+#elif MODE == MODE_ONE
+        queue = blk_init_queue(rmem_request_one, &device->lock);
 #else
-        BUG();
+        #error "Wrong Mode"
 #endif
         if (queue == NULL)
           goto out_rdma_exit;

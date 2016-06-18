@@ -3,10 +3,11 @@
 
 #define MODE_SYNC 1
 #define MODE_ASYNC 2
-#define MODE MODE_SYNC
+#define MODE_ONE 3
+#define MODE MODE_ONE
 
 
-#define CUSTOM_MAKE_REQ_FN false
+#define CUSTOM_MAKE_REQ_FN 0
 #define KERNEL_SECTOR_SIZE   512
 #define SECTORS_PER_PAGE  (PAGE_SIZE / KERNEL_SECTOR_SIZE)
 #define DEVICE_BOUND 100
@@ -18,7 +19,7 @@
 #define RDMA_BUFFER_SIZE (1024*1024)
 #define CQE_SIZE 4096
 
-
+#define DEBUG_OUT_REQ 0
 #define MEASURE_LATENCY 1
 #define LATENCY_BUCKET 1000
 #endif
