@@ -539,6 +539,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
     int ret;
     struct batch_request* batch_req, *curr;
     struct request* req;
+    spinlock_t* queue_lock;
     rdma_ctx_t ctx = (rdma_ctx_t)cq_context;
  
     LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
@@ -569,13 +570,14 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
                         for(curr = batch_req; curr != NULL; curr = (struct batch_request*)curr->next)
                         {
                             req = (struct request*)curr->req;
+                            queue_lock = req->q->queue_lock;
                             LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
                             #if DEBUG_OUT_REQ
                             debug_pool_remove(ctx->pool, req);
                             #endif
-                            spin_lock_irq(req->q->queue_lock);
+                            spin_lock_irq(queue_lock);
                             __blk_end_request_all(req, 0);
-                            spin_unlock_irq(req->q->queue_lock);
+                            spin_unlock_irq(queue_lock);
                             //__blk_end_request(curr->req, 0, curr->nsec);
                             return_batch_request(ctx->pool, curr);
                         }

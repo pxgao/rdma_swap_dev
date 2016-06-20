@@ -20,6 +20,6 @@
 #define CQE_SIZE 4096
 
 #define DEBUG_OUT_REQ 0
-#define MEASURE_LATENCY 1
+#define MEASURE_LATENCY 0
 #define LATENCY_BUCKET 1000
 #endif
