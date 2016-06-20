@@ -28,11 +28,11 @@ typedef struct rdma_request
 typedef struct batch_request
 {
     int id;
-    union
-    {
-        struct request * req;
-        struct bio *bio;
-    };
+#if CUSTOM_MAKE_REQ_FN
+    struct bio *bio;
+#else
+    volatile struct request * req;
+#endif
     int nsec;
     volatile int outstanding_reqs;
     volatile struct batch_request* next;

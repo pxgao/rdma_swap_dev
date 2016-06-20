@@ -153,7 +153,7 @@ void debug_pool_insert(struct batch_request_pool* pool, struct request* req)
 
 void debug_pool_remove(struct batch_request_pool* pool, struct request* req)
 {
-    int i, free = -1;
+    int i;
 
     spin_lock_irq(&pool->lock);
     for (i = 0; i < 1024; i++)
@@ -538,6 +538,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
     struct ib_wc wc;
     int ret;
     struct batch_request* batch_req, *curr;
+    struct request* req;
     rdma_ctx_t ctx = (rdma_ctx_t)cq_context;
  
     LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
@@ -565,15 +566,16 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
                         bio_endio(batch_req->bio, 0);
                         return_batch_request(ctx->pool, batch_req);
                     #else
-                        for(curr = batch_req; curr != NULL; curr = curr->next)
+                        for(curr = batch_req; curr != NULL; curr = (struct batch_request*)curr->next)
                         {
+                            req = (struct request*)curr->req;
                             LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
                             #if DEBUG_OUT_REQ
-                            debug_pool_remove(ctx->pool, curr->req);
+                            debug_pool_remove(ctx->pool, req);
                             #endif
-                            spin_lock_irq(curr->req->q->queue_lock);
-                            __blk_end_request_all(curr->req, 0);
-                            spin_unlock_irq(curr->req->q->queue_lock);
+                            spin_lock_irq(req->q->queue_lock);
+                            __blk_end_request_all(req, 0);
+                            spin_unlock_irq(req->q->queue_lock);
                             //__blk_end_request(curr->req, 0, curr->nsec);
                             return_batch_request(ctx->pool, curr);
                         }
@@ -805,7 +807,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
 
 int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
 {
-    int i, ret = 0;
+    int i;
     struct rdma_ctx* ctx = ct;
 
 
