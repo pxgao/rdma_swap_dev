@@ -50,7 +50,15 @@ struct rmem_device {
   struct gendisk *gd;
   int major_num;
   rdma_ctx_t rdma_ctx;
+  #if COPY_LESS
+  struct ib_send_wr wrs[MAX_REQ];
+  struct ib_sge sges[MAX_REQ];
+  #endif
+  #if MODE == MODE_ASYNC || MODE == MODE_ONE
   rdma_request *rdma_req[REQ_ARR_SIZE];
+  #else
+  rdma_request rdma_req[MAX_REQ;
+  #endif
   volatile int head;
   volatile int tail;
   struct request *blk_req[MAX_REQ];
@@ -62,6 +70,7 @@ int initd = 0;
 
 static struct proc_dir_entry* proc_entry;
 
+#if MODE == MODE_ASYNC || MODE == MODE_ONE
 struct rdma_request* get_rdma_request_arr(struct rmem_device* dev)
 {
     struct rdma_request* ret = NULL;
@@ -102,6 +111,7 @@ void return_rdma_request_arr(struct rmem_device* pool, rdma_request* req)
     pool->tail = new_tail;
     spin_unlock(&pool->arr_lock);
 }
+#endif
 
 #if MODE == MODE_ASYNC
 static void rmem_request_async(struct request_queue *q)
@@ -220,10 +230,16 @@ static void rmem_request_sync(struct request_queue *q)
   int i, blk_req_count = 0, rdma_req_count = 0;
   struct rmem_device *dev = q->queuedata;
   char* buffer;
+  #if COPY_LESS
+  struct ib_send_wr* bad_wr;
+  #else
   rdma_request *rdma_req;
+  #endif
 
   LOG_KERN(LOG_INFO, "=======Start of rmem request======");
-  rdma_req = get_rdma_request_arr(dev);
+  #if !COPY_LESS
+  rdma_req = dev->rdma_req;
+  #endif
 
   while ((req = blk_fetch_request(q)) != NULL) 
   {
@@ -246,6 +262,25 @@ static void rmem_request_sync(struct request_queue *q)
       bio_for_each_segment(bvec, bio, iter) 
       {
         buffer = __bio_kmap_atomic(bio, iter);
+        #if COPY_LESS
+        make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sgs+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, cur_rdma_req->length), (uint64_t)sector * KERNEL_SECTOR_SIZE, (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE, NULL); 
+        if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sgs+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sgs+rdma_req_count))
+        {
+            LOG_KERN(LOG_INFO, "Merged rdma req");
+        }
+        else
+        {
+            if(rdma_req_count > 0)
+                dev->wrs[rdma_req_count].next = dev->wrs+rdma_req_count+1;
+            rdma_req_count++;
+        }
+        if(rdma_req_count >= MAX_REQ)
+        {
+          ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
+          poll_cq(dev->rdma_ctx);
+          rdma_req_count = 0;
+        }
+        #else
         cur_rdma_req = rdma_req + rdma_req_count;
         cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
         cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
@@ -270,7 +305,7 @@ static void rmem_request_sync(struct request_queue *q)
           rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
           rdma_req_count = 0;
         }
-
+        #endif
         sector += bio_cur_bytes(bio) >> 9;
         __bio_kunmap_atomic(buffer);
       }
@@ -280,14 +315,21 @@ static void rmem_request_sync(struct request_queue *q)
 
   if(rdma_req_count)
   {
+    #if COPY_LESS
+    ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
+    poll_cq(dev->rdma_ctx);
+    #else
     rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
+    #endif
   }
 
   for(i = 0; i < blk_req_count; i++)
   {
     __blk_end_request_all(dev->blk_req[i], 0);
   }
+  #if !COPY_LESS
   return_rdma_request_arr(dev, rdma_req);
+  #endif
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
 #endif

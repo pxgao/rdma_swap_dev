@@ -4,8 +4,9 @@
 #define MODE_SYNC 1
 #define MODE_ASYNC 2
 #define MODE_ONE 3
-#define MODE MODE_ONE
+#define MODE MODE_ASYNC
 
+#define COPY_LESS 1
 
 #define CUSTOM_MAKE_REQ_FN 0
 #define KERNEL_SECTOR_SIZE   512
