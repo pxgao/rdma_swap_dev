@@ -57,7 +57,7 @@ struct rmem_device {
   #if MODE == MODE_ASYNC || MODE == MODE_ONE
   rdma_request *rdma_req[REQ_ARR_SIZE];
   #else
-  rdma_request rdma_req[MAX_REQ;
+  rdma_request rdma_req[MAX_REQ];
   #endif
   volatile int head;
   volatile int tail;
@@ -231,7 +231,7 @@ static void rmem_request_sync(struct request_queue *q)
   struct rmem_device *dev = q->queuedata;
   char* buffer;
   #if COPY_LESS
-  struct ib_send_wr* bad_wr;
+  struct ib_send_wr** bad_wr;
   #else
   rdma_request *rdma_req;
   #endif
@@ -263,8 +263,8 @@ static void rmem_request_sync(struct request_queue *q)
       {
         buffer = __bio_kmap_atomic(bio, iter);
         #if COPY_LESS
-        make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sgs+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, cur_rdma_req->length), (uint64_t)sector * KERNEL_SECTOR_SIZE, (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE, NULL); 
-        if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sgs+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sgs+rdma_req_count))
+        make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, cur_rdma_req->length), (uint64_t)sector * KERNEL_SECTOR_SIZE, (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE, NULL); 
+        if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sges+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sges+rdma_req_count))
         {
             LOG_KERN(LOG_INFO, "Merged rdma req");
         }
@@ -664,9 +664,11 @@ static int __init rmem_init(void) {
       device->head = 0;
       device->tail = REQ_ARR_SIZE - 1;
 
+      #if MODE == MODE_ASYNC || MODE == MODE_ONE
       for(i = 0; i < REQ_ARR_SIZE; i++)
         device->rdma_req[i] = vmalloc(sizeof(rdma_request) * MAX_REQ);
-    
+      #endif    
+
       device->rdma_ctx = rdma_init(npages, tmp_srv, port, REQ_POOL_SIZE);
       if(device->rdma_ctx == NULL){
         pr_info("rdma_init() failed\n");
@@ -774,10 +776,12 @@ static void __exit rmem_exit(void)
       blk_cleanup_queue(devices[c]->gd->queue);
 
       rdma_exit(devices[c]->rdma_ctx);
-      
+    
+      #if MODE == MODE_ASYNC || MODE == MODE_ONE 
       for(i = 0; i < REQ_ARR_SIZE; i++)
         if(devices[c]->rdma_req[i])
           vfree(devices[c]->rdma_req[i]);
+      #endif
 
       vfree(devices[c]);
       devices[c] = NULL;

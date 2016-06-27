@@ -604,7 +604,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 }
 
 
-static void poll_cq(rdma_ctx_t ctx)
+void poll_cq(rdma_ctx_t ctx)
 {
     struct ib_wc wc[10];
     struct ib_cq* cq = ctx->send_cq;
