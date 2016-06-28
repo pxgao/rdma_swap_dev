@@ -623,12 +623,12 @@ void poll_cq(rdma_ctx_t ctx)
                             wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" 
                                :"other", (unsigned) wc[i].byte_len);
                     #if MEASURE_LATENCY
-                        if(first_rdma_req)
-                        {
-                            first_rdma_req = false;
-                            bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
-                            ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
-                        }                        
+                    if(first_rdma_req)
+                    {
+                        first_rdma_req = false;
+                        bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
+                        ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
+                    }                        
                     #endif
                 } else {
                     LOG_KERN(LOG_INFO, "FAILURE %d", wc[i].status);
@@ -643,6 +643,7 @@ void poll_cq(rdma_ctx_t ctx)
         }*/
     } while ( ctx->outstanding_requests > 0);
 
+    LOG_KERN(LOG_INFO, "COMP HANDLER done");
 }
 
 #endif

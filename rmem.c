@@ -232,6 +232,7 @@ static void rmem_request_sync(struct request_queue *q)
   char* buffer;
   #if COPY_LESS
   struct ib_send_wr** bad_wr;
+  uint32_t curr_length;
   #else
   rdma_request *rdma_req;
   #endif
@@ -263,20 +264,26 @@ static void rmem_request_sync(struct request_queue *q)
       {
         buffer = __bio_kmap_atomic(bio, iter);
         #if COPY_LESS
-        make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, cur_rdma_req->length), (uint64_t)sector * KERNEL_SECTOR_SIZE, (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE, NULL); 
+        curr_length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+        make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, curr_length), (uint64_t)sector * KERNEL_SECTOR_SIZE, curr_length, NULL); 
         if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sges+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sges+rdma_req_count))
         {
             LOG_KERN(LOG_INFO, "Merged rdma req");
         }
         else
         {
+            LOG_KERN(LOG_INFO, "New rdma req");
             if(rdma_req_count > 0)
-                dev->wrs[rdma_req_count].next = dev->wrs+rdma_req_count+1;
+            {
+                dev->wrs[rdma_req_count-1].next = dev->wrs+rdma_req_count;
+            }
             rdma_req_count++;
         }
         if(rdma_req_count >= MAX_REQ)
         {
+          LOG_KERN(LOG_INFO, "Sending %d rdma reqs", rdma_req_count);
           ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
+          dev->rdma_ctx->outstanding_requests = rdma_req_count;
           poll_cq(dev->rdma_ctx);
           rdma_req_count = 0;
         }
@@ -316,7 +323,9 @@ static void rmem_request_sync(struct request_queue *q)
   if(rdma_req_count)
   {
     #if COPY_LESS
+    LOG_KERN(LOG_INFO, "Sending %d rdma reqs", rdma_req_count);
     ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
+    dev->rdma_ctx->outstanding_requests = rdma_req_count;
     poll_cq(dev->rdma_ctx);
     #else
     rdma_op(dev->rdma_ctx, rdma_req, rdma_req_count);
