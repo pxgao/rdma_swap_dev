@@ -7,6 +7,7 @@
 #define MODE MODE_SYNC
 
 #define COPY_LESS 1
+#define SIMPLE_POLL 1
 
 #define CUSTOM_MAKE_REQ_FN 0
 #define KERNEL_SECTOR_SIZE   512
