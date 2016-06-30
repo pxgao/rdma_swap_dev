@@ -243,7 +243,7 @@ int setup_rdma_2(struct context* s_ctx)
 #endif
 }
 
-int setup_rdma_1(struct context* s_ctx)
+int setup_rdma_1(struct context* s_ctx, char * buffer, int buf_size_gb)
 {
    struct ibv_device **dev_list;
    struct ibv_device *ibv_dev;
@@ -260,10 +260,16 @@ int setup_rdma_1(struct context* s_ctx)
    s_ctx->pd = ibv_alloc_pd(s_ctx->context);
    CHECK_MSG(s_ctx->pd != 0, "Error gettign pd");
 
-   s_ctx->rdma_buffer = (char*)malloc(s_ctx->rdma_mem_size);
+   if(s_ctx->rdma_mem_size > (unsigned long long)buf_size_gb * 1024ULL * 1024 * 1024)
+   {
+       printf("buffer size %llu, request size %llu\n", buf_size_gb * 1024ULL * 1024 * 1024, s_ctx->rdma_mem_size);
+       exit(-1);
+   }
+   s_ctx->rdma_buffer = buffer;
+   //s_ctx->rdma_buffer = (char*)malloc(s_ctx->rdma_mem_size);
    //strcpy(s_ctx.rdma_buffer, "AHOY!");
    CHECK_MSG(s_ctx->rdma_buffer != 0, "Error getting buf");
-   memset(s_ctx->rdma_buffer, 0, s_ctx->rdma_mem_size);
+   //memset(s_ctx->rdma_buffer, 0, s_ctx->rdma_mem_size);
    s_ctx->mr = ibv_reg_mr(s_ctx->pd, s_ctx->rdma_buffer, s_ctx->rdma_mem_size, 
                             IBV_ACCESS_LOCAL_WRITE | 
                             IBV_ACCESS_REMOTE_WRITE | 
@@ -329,7 +335,7 @@ int shutdown_rdma_1(struct context* s_ctx)
    ret = ibv_dereg_mr(s_ctx->mr);
    CHECK_MSG(ret == 0, "ibv_dereg_mr() failed");
 
-   free(s_ctx->rdma_buffer);
+   //free(s_ctx->rdma_buffer);
 
    ret = ibv_dealloc_pd(s_ctx->pd);
    CHECK_MSG(ret == 0, "ibv_dealloc_pd() failed");
@@ -385,11 +391,20 @@ void wait_for_tcp_connection(int* new_fd)
     close(sockfd);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
-    int new_fd;
+    int new_fd, size_gb;
     struct context s_ctx;
     char time[50];
+    char* buffer;
+    
+    if(argc != 2)
+    {
+        puts("usage: pserver mem_sz_gb");
+        exit(-1);
+    }
+    size_gb = atoi(argv[1]);
+    buffer = malloc(size_gb * 1024 * 1024 * 1024);  
 
     while(1)
     {
@@ -404,7 +419,7 @@ int main(void)
         puts("Handshaking. Getting mem_size");
         handshake_get_memsize(&s_ctx, &new_fd);
     
-        setup_rdma_1(&s_ctx);
+        setup_rdma_1(&s_ctx, buffer, size_gb);
         get_port_data(&s_ctx);
         
         puts("Handshaking");
