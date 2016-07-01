@@ -249,14 +249,18 @@ int setup_rdma_1(struct context* s_ctx, char * buffer, int buf_size_gb)
    struct ibv_device *ibv_dev;
 
    int num_devices;
+
+   puts("setup_rdma_1() getting device list");
    dev_list = ibv_get_device_list(&num_devices);
 
    ibv_dev = dev_list[0];
    CHECK_MSG(ibv_dev != NULL, "Error getting device");
 
+   puts("opening dev");
    s_ctx->context = ibv_open_device(ibv_dev);
    CHECK_MSG(s_ctx->context != NULL, "Error getting cntext");
 
+   puts("allocating pd");
    s_ctx->pd = ibv_alloc_pd(s_ctx->context);
    CHECK_MSG(s_ctx->pd != 0, "Error gettign pd");
 
@@ -265,11 +269,13 @@ int setup_rdma_1(struct context* s_ctx, char * buffer, int buf_size_gb)
        printf("buffer size %llu, request size %llu\n", buf_size_gb * 1024ULL * 1024 * 1024, s_ctx->rdma_mem_size);
        exit(-1);
    }
+   puts("getting buffer");
    s_ctx->rdma_buffer = buffer;
    //s_ctx->rdma_buffer = (char*)malloc(s_ctx->rdma_mem_size);
    //strcpy(s_ctx.rdma_buffer, "AHOY!");
    CHECK_MSG(s_ctx->rdma_buffer != 0, "Error getting buf");
    //memset(s_ctx->rdma_buffer, 0, s_ctx->rdma_mem_size);
+   puts("reg_mr");
    s_ctx->mr = ibv_reg_mr(s_ctx->pd, s_ctx->rdma_buffer, s_ctx->rdma_mem_size, 
                             IBV_ACCESS_LOCAL_WRITE | 
                             IBV_ACCESS_REMOTE_WRITE | 
@@ -404,7 +410,8 @@ int main(int argc, char **argv)
         exit(-1);
     }
     size_gb = atoi(argv[1]);
-    buffer = malloc(size_gb * 1024 * 1024 * 1024);  
+    buffer = malloc((unsigned long long)size_gb * 1024ULL * 1024 * 1024);  
+    printf("Allocated %llu bytes at %p\n", (unsigned long long)size_gb * 1024ULL * 1024 * 1024, buffer);
 
     while(1)
     {
