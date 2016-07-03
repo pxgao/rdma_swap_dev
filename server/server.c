@@ -89,7 +89,7 @@ void wait_for_tearingdown(struct context* s_ctx, int* new_fd)
     char recv_buffer[1000];
     int retval;
     char* done = "done";
-    /*
+    
     do
     {
         retval = recv(*new_fd, recv_buffer, 1000, 0);
@@ -100,13 +100,12 @@ void wait_for_tearingdown(struct context* s_ctx, int* new_fd)
         }
     }
     while( strncmp(recv_buffer, "teardown", 8) != 0 );
-    */
-    retval = recv(*new_fd, recv_buffer, 1000, 0);
+    
+    //retval = recv(*new_fd, recv_buffer, 1000, 0);
     send(*new_fd, done, strlen(done), 0); 
 }
 
-static
-void exchange_bootstrap_data(struct context* s_ctx, int* new_fd)
+static void exchange_bootstrap_data(struct context* s_ctx, int* new_fd)
 {
     
     //s_ctx.rdma_buffer, s_ctx.local_rkey, s_ctx.qpn, s_ctx.psn, s_ctx.lid
@@ -386,6 +385,7 @@ void wait_for_tcp_connection(int* new_fd)
     }
     
     sin_size = sizeof(struct sockaddr_in);
+    puts("waiting for accept");
     if ((*new_fd = accept(sockfd, (struct sockaddr *)&their_addr,&sin_size)) == -1)
     {
 	    //perror("accept");
@@ -431,12 +431,16 @@ int main(int argc, char **argv)
         
         puts("Handshaking");
         handshake(&s_ctx, &new_fd);
-    
+        close(new_fd);
+        new_fd = 0;
+
         setup_rdma_2(&s_ctx);
     
         CHECK(ibv_req_notify_cq(s_ctx.send_cq, 0) == 0);
         CHECK(ibv_req_notify_cq(s_ctx.recv_cq, 0) == 0);
     
+        puts("Done. Waiting for tcp conn.");
+        wait_for_tcp_connection(&new_fd);
         puts("Done. Waiting for tearing down msg");
         wait_for_tearingdown(&s_ctx, &new_fd);
         
