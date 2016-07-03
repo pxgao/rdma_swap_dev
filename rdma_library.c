@@ -631,15 +631,24 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 
 void poll_cq(rdma_ctx_t ctx)
 {
-    struct ib_wc wc[10];
+    struct ib_wc wc[16];
     struct ib_cq* cq = ctx->send_cq;
     int count, i, bucket;
-    bool first_rdma_req = true;
 
     LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
 
     do {
         while ((count = ib_poll_cq(cq, 10, wc)) > 0) {
+            #if SIMPLE_POLL
+            #if MEASURE_LATENCY
+            if(wc[0].wr_id)
+            {
+                bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
+                ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
+            }                        
+            #endif
+            ctx->outstanding_requests-=count;
+            #else
             for(i = 0; i < count; i++){
                 if (wc[i].status == IB_WC_SUCCESS) {
                     LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %llu op: %s byte_len: %u",
@@ -648,9 +657,8 @@ void poll_cq(rdma_ctx_t ctx)
                             wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" 
                                :"other", (unsigned) wc[i].byte_len);
                     #if MEASURE_LATENCY
-                    if(first_rdma_req)
+                    if(wc[i].wr_id)
                     {
-                        first_rdma_req = false;
                         bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
                         ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
                     }                        
@@ -660,6 +668,7 @@ void poll_cq(rdma_ctx_t ctx)
                 }
                 ctx->outstanding_requests--;
             }
+            #endif
         }
         /*ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
         if (ret < 0) {
@@ -818,11 +827,7 @@ void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP o
 #if MODE == MODE_ASYNC || MODE == MODE_ONE
     wr->wr_id      = (u64)batch_req;
 #elif MODE == MODE_SYNC
-  #if MEASURE_LATENCY
-    wr->wr_id      = (u64)get_cycle(); 
-  #else
     wr->wr_id      = 0;
-  #endif
 #else
     #error "Wrong Mode"
 #endif

@@ -7,6 +7,7 @@
 #define MODE MODE_SYNC
 
 #define COPY_LESS 1
+#define SIMPLE_POLL 1
 
 #define CUSTOM_MAKE_REQ_FN 0
 #define KERNEL_SECTOR_SIZE   512
@@ -22,5 +23,5 @@
 
 #define DEBUG_OUT_REQ 0
 #define MEASURE_LATENCY 0
-#define LATENCY_BUCKET 1000
+#define LATENCY_BUCKET 100
 #endif
