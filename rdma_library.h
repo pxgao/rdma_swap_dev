@@ -69,6 +69,8 @@ typedef struct batch_request_pool
 
 struct rdma_ctx {
     struct socket *sock;
+    char server_addr[100];
+    int server_port;
    
     struct ib_cq* send_cq, *recv_cq;
     struct ib_pd* pd;

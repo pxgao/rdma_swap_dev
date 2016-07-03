@@ -287,11 +287,16 @@ static u32 create_address(u8 *ip)
    return addr;
 }
 
+
+
 static int connect(rdma_ctx_t ctx, char* ip_addr, int port)
 {
     int retval;
     struct sockaddr_in servaddr;
     u8 IP[4] = {};
+
+    strcpy(ctx->server_addr, ip_addr);
+    ctx->server_port = port;
 
     retval = translate_ip(ip_addr, IP);
     if (retval != 0)
@@ -317,6 +322,11 @@ static int connect(rdma_ctx_t ctx, char* ip_addr, int port)
     CHECK_MSG_RET(retval == 0, "Error connecting", -1);
 
     return 0;
+}
+
+static int reconnect(rdma_ctx_t ctx)
+{
+    return connect(ctx, ctx->server_addr, ctx->server_port);
 }
 
 static int receive_data(rdma_ctx_t ctx, char* data, int size) {
@@ -420,6 +430,21 @@ static int handshake(rdma_ctx_t ctx)
     send_data(ctx, data, strlen(data));
 
     return 0;
+}
+
+static int teardown(rdma_ctx_t ctx)
+{
+    int retval;
+    char data[500];
+
+    snprintf(data, 500, "teardown");
+    do
+    {
+        send_data(ctx, data, strlen(data));
+        retval = receive_data(ctx, data, 500);
+    }
+    while(strncmp(data, "done", 4) != 0);
+    LOG_KERN(LOG_INFO, "rdma connection terminated");
 }
 
 static int modify_qp(rdma_ctx_t ctx)
@@ -667,6 +692,9 @@ void cq_event_handler_recv(struct ib_event* ib_e, void* v)
 
 int rdma_exit(rdma_ctx_t ctx)
 {
+    int retval = reconnect(ctx);
+    teardown(ctx);
+
     CHECK_MSG_RET(ctx->sock != 0, "Error releasing socket", -1);
     sock_release(ctx->sock);
 
@@ -752,11 +780,14 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
     if (retval != 0)
         return 0;
 
+    sock_release(ctx->sock);
+
     init_waitqueue_head(&ctx->queue);
     atomic64_set(&ctx->wr_count, 0);
 
     atomic_set(&ctx->operation_count, 0);
     atomic_set(&ctx->comp_handler_count, 0);
+
 
     ctx->pool = get_batch_request_pool(mem_pool_size);
     return ctx;
