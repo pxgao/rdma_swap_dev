@@ -264,7 +264,7 @@ static void rmem_request_sync(struct request_queue *q)
       {
         buffer = __bio_kmap_atomic(bio, iter);
         #if COPY_LESS
-        curr_length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+        curr_length = bio_cur_bytes(bio);
         make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, curr_length), (uint64_t)sector * KERNEL_SECTOR_SIZE, curr_length, NULL); 
         if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sges+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sges+rdma_req_count))
         {
@@ -294,7 +294,7 @@ static void rmem_request_sync(struct request_queue *q)
         #else
         cur_rdma_req = rdma_req + rdma_req_count;
         cur_rdma_req->rw = bio_data_dir(bio)?RDMA_WRITE:RDMA_READ;
-        cur_rdma_req->length = (bio_cur_bytes(bio) >> 9) * KERNEL_SECTOR_SIZE;
+        cur_rdma_req->length = bio_cur_bytes(bio);
         cur_rdma_req->dma_addr = rdma_map_address(buffer, cur_rdma_req->length);
         cur_rdma_req->remote_offset = (uint64_t)sector * KERNEL_SECTOR_SIZE;
 
