@@ -282,7 +282,9 @@ static void rmem_request_sync(struct request_queue *q)
         if(rdma_req_count >= MAX_REQ)
         {
           LOG_KERN(LOG_INFO, "Sending %d rdma reqs", rdma_req_count);
+          #if MEASURE_LATENCY
           dev->wrs[0].wr_id = (u64)get_cycle();
+          #endif
           ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
           dev->rdma_ctx->outstanding_requests = rdma_req_count;
           poll_cq(dev->rdma_ctx);
@@ -325,7 +327,9 @@ static void rmem_request_sync(struct request_queue *q)
   {
     #if COPY_LESS
     LOG_KERN(LOG_INFO, "Sending %d rdma reqs", rdma_req_count);
+    #if MEASURE_LATENCY
     dev->wrs[0].wr_id = (u64)get_cycle();
+    #endif
     ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
     dev->rdma_ctx->outstanding_requests = rdma_req_count;
     poll_cq(dev->rdma_ctx);
