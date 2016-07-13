@@ -640,13 +640,14 @@ void poll_cq(rdma_ctx_t ctx)
     do {
         while ((count = ib_poll_cq(cq, 10, wc)) > 0) {
             #if SIMPLE_POLL
-            #if MEASURE_LATENCY
+            # if MEASURE_LATENCY
             if(wc[0].wr_id)
             {
                 bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
                 ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
             }                        
-            #endif
+            # endif
+            LOG_KERN(LOG_INFO, "poll %d reqs, out req %d", count, ctx->outstanding_requests);
             ctx->outstanding_requests-=count;
             #else
             for(i = 0; i < count; i++){

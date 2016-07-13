@@ -291,6 +291,9 @@ static void rmem_request_sync(struct request_queue *q)
           if(rdma_req_count == 1 && dev->wrs[0].sg_list->length == 4096)
             dev->wrs[0].wr_id = (u64)get_cycle();
           #endif
+          #if SIMPLE_MAKE_WR
+          dev->wrs[rdma_req_count-1].next = NULL;
+          #endif
           ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
           dev->rdma_ctx->outstanding_requests = rdma_req_count;
           poll_cq(dev->rdma_ctx);
@@ -336,6 +339,9 @@ static void rmem_request_sync(struct request_queue *q)
     #if MEASURE_LATENCY
     if(rdma_req_count < 10)
       dev->wrs[0].wr_id = (u64)get_cycle();
+    #endif
+    #if SIMPLE_MAKE_WR
+    dev->wrs[rdma_req_count-1].next = NULL;
     #endif
     ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
     dev->rdma_ctx->outstanding_requests = rdma_req_count;
