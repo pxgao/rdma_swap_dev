@@ -8,6 +8,7 @@
 
 #define COPY_LESS 1
 #define SIMPLE_POLL 1
+#define SIMPLE_MAKE_WR 1
 
 #define CUSTOM_MAKE_REQ_FN 0
 #define KERNEL_SECTOR_SIZE   512
@@ -15,7 +16,7 @@
 #define DEVICE_BOUND 100
 #define REQ_ARR_SIZE 10
 #define MAX_REQ 1024
-#define MERGE_REQ true
+#define MERGE_REQ false
 #define REQ_POOL_SIZE 1024
 
 #define RDMA_BUFFER_SIZE (1024*1024)

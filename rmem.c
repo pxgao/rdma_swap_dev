@@ -53,11 +53,12 @@ struct rmem_device {
   #if COPY_LESS
   struct ib_send_wr wrs[MAX_REQ];
   struct ib_sge sges[MAX_REQ];
-  #endif
-  #if MODE == MODE_ASYNC || MODE == MODE_ONE
-  rdma_request *rdma_req[REQ_ARR_SIZE];
   #else
+  # if MODE == MODE_ASYNC || MODE == MODE_ONE
+  rdma_request *rdma_req[REQ_ARR_SIZE];
+  # else
   rdma_request rdma_req[MAX_REQ];
+  # endif
   #endif
   volatile int head;
   volatile int tail;
@@ -265,7 +266,11 @@ static void rmem_request_sync(struct request_queue *q)
         buffer = __bio_kmap_atomic(bio, iter);
         #if COPY_LESS
         curr_length = bio_cur_bytes(bio);
+        #if SIMPLE_MAKE_WR
+        simple_make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, curr_length), (uint64_t)sector * KERNEL_SECTOR_SIZE, curr_length, NULL); 
+        #else
         make_wr(dev->rdma_ctx, dev->wrs+rdma_req_count, dev->sges+rdma_req_count, bio_data_dir(bio)?RDMA_WRITE:RDMA_READ, rdma_map_address(buffer, curr_length), (uint64_t)sector * KERNEL_SECTOR_SIZE, curr_length, NULL); 
+        #endif
         if(MERGE_REQ && rdma_req_count > 0 && merge_wr(dev->wrs+rdma_req_count-1, dev->sges+rdma_req_count-1, dev->wrs+rdma_req_count, dev->sges+rdma_req_count))
         {
             LOG_KERN(LOG_INFO, "Merged rdma req");
@@ -283,7 +288,7 @@ static void rmem_request_sync(struct request_queue *q)
         {
           LOG_KERN(LOG_INFO, "Sending %d rdma reqs", rdma_req_count);
           #if MEASURE_LATENCY
-          if(rdma_req_count < 10)
+          if(rdma_req_count == 1 && dev->wrs[0].sg_list->length == 4096)
             dev->wrs[0].wr_id = (u64)get_cycle();
           #endif
           ib_post_send(dev->rdma_ctx->qp, dev->wrs, bad_wr);
@@ -344,9 +349,6 @@ static void rmem_request_sync(struct request_queue *q)
   {
     __blk_end_request_all(dev->blk_req[i], 0);
   }
-  #if !COPY_LESS
-  return_rdma_request_arr(dev, rdma_req);
-  #endif
   LOG_KERN(LOG_INFO, "======End of rmem request======");
 }
 #endif
@@ -681,6 +683,7 @@ static int __init rmem_init(void) {
       device->head = 0;
       device->tail = REQ_ARR_SIZE - 1;
 
+
       #if MODE == MODE_ASYNC || MODE == MODE_ONE
       for(i = 0; i < REQ_ARR_SIZE; i++)
         device->rdma_req[i] = vmalloc(sizeof(rdma_request) * MAX_REQ);
@@ -691,7 +694,18 @@ static int __init rmem_init(void) {
         pr_info("rdma_init() failed\n");
         goto out;
       }
-      /*
+      #if SIMPLE_MAKE_WR
+      memset(device->wrs, 0, MAX_REQ * sizeof(struct ib_send_wr));
+      memset(device->sges, 0, MAX_REQ * sizeof(struct ib_sge));
+      for(i = 0; i < MAX_REQ; i++)
+      {
+        device->sges[i].lkey = device->rdma_ctx->mr->lkey;
+        device->wrs[i].sg_list = device->sges + i;
+        device->wrs[i].num_sge = 1;
+        device->wrs[i].send_flags = IB_SEND_SIGNALED;
+        device->wrs[i].wr.rdma.rkey = device->rdma_ctx->rem_rkey;
+      }
+      #endif      /*
        * Get a request queue.
        */
       if(CUSTOM_MAKE_REQ_FN)

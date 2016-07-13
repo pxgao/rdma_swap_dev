@@ -631,7 +631,7 @@ static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 
 void poll_cq(rdma_ctx_t ctx)
 {
-    struct ib_wc wc[16];
+    struct ib_wc wc[10];
     struct ib_cq* cq = ctx->send_cq;
     int count, i, bucket;
 
@@ -837,6 +837,23 @@ void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP o
     wr->send_flags = IB_SEND_SIGNALED;
     wr->wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
     wr->wr.rdma.rkey        = ctx->rem_rkey;
+}
+
+void simple_make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
+        u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
+{
+    sg->addr     = (uintptr_t)dma_addr;
+    sg->length   = length;
+
+#if MODE == MODE_ASYNC || MODE == MODE_ONE
+    wr->wr_id      = (u64)batch_req;
+#elif MODE == MODE_SYNC
+    wr->wr_id      = 0;
+#else
+    #error "Wrong Mode"
+#endif
+    wr->opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
+    wr->wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
 }
 
 
