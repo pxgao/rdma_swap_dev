@@ -643,7 +643,7 @@ void poll_cq(rdma_ctx_t ctx)
             # if MEASURE_LATENCY
             if(wc[0].wr_id)
             {
-                bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
+                bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)/3000;
                 ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
             }                        
             # endif
@@ -660,7 +660,7 @@ void poll_cq(rdma_ctx_t ctx)
                     #if MEASURE_LATENCY
                     if(wc[i].wr_id)
                     {
-                        bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)*1000/cpu_khz;
+                        bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)/3000;
                         ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
                     }                        
                     #endif

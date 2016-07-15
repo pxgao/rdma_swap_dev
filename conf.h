@@ -25,4 +25,20 @@
 #define DEBUG_OUT_REQ 0
 #define MEASURE_LATENCY 0
 #define LATENCY_BUCKET 100
+
+
+//redefine
+#if MEASURE_LATENCY
+#define MAX_REQ 1
 #endif
+
+//check
+#if MEASURE_LATENCY && MAX_REQ != 1
+#error
+#endif
+
+
+#endif
+
+
+
