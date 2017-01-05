@@ -27,7 +27,6 @@
    }\
 }
 
-#define MYPORT 18516
 
 
 struct context {
@@ -352,7 +351,7 @@ int shutdown_rdma_1(struct context* s_ctx)
 }
 
 
-void wait_for_tcp_connection(int* new_fd)
+void wait_for_tcp_connection(int* new_fd, int port)
 {
     int sockfd;
     int sin_size;
@@ -369,7 +368,7 @@ void wait_for_tcp_connection(int* new_fd)
         exit(1);
     }
     my_addr.sin_family = AF_INET; // host byte order
-    my_addr.sin_port = htons(MYPORT); // short, network byte order
+    my_addr.sin_port = htons(port); // short, network byte order
     my_addr.sin_addr.s_addr = INADDR_ANY; // automatically fill with my IP
     memset(&(my_addr.sin_zero), 0, 8); // zero the rest of the struct
 
@@ -392,26 +391,28 @@ void wait_for_tcp_connection(int* new_fd)
 	    exit(-1);
     }
     printf("Received request from Client: %s:%d\n",
-		    inet_ntoa(their_addr.sin_addr),MYPORT);
+		    inet_ntoa(their_addr.sin_addr), port);
 
     close(sockfd);
 }
 
 int main(int argc, char **argv)
 {
-    int new_fd, size_gb;
+    int new_fd, port;
+    double size_gb;
     struct context s_ctx;
     char time[50];
     char* buffer;
     
-    if(argc != 2)
+    if(argc != 3)
     {
-        puts("usage: pserver mem_sz_gb");
+        puts("usage: pserver port mem_sz_gb");
         exit(-1);
     }
-    size_gb = atoi(argv[1]);
-    buffer = malloc((unsigned long long)size_gb * 1024ULL * 1024 * 1024);  
-    printf("Allocated %llu bytes at %p\n", (unsigned long long)size_gb * 1024ULL * 1024 * 1024, buffer);
+    port = atoi(argv[1]);
+    size_gb = strtod(argv[2], NULL);
+    buffer = malloc((unsigned long long)(size_gb * 1024 * 1024 * 1024));  
+    printf("Allocated %llu bytes at %p\n", (unsigned long long)(size_gb * 1024 * 1024 * 1024), buffer);
 
     while(1)
     {
@@ -419,7 +420,7 @@ int main(int argc, char **argv)
         memset(&s_ctx, 0, sizeof(struct context));      
 
         puts("Waiting for TCP connection");
-        wait_for_tcp_connection(&new_fd);
+        wait_for_tcp_connection(&new_fd, port);
         
         get_time(time);
         puts(time);
@@ -440,7 +441,7 @@ int main(int argc, char **argv)
         CHECK(ibv_req_notify_cq(s_ctx.recv_cq, 0) == 0);
     
         puts("Done. Waiting for tcp conn.");
-        wait_for_tcp_connection(&new_fd);
+        wait_for_tcp_connection(&new_fd, port);
         puts("Done. Waiting for tearing down msg");
         wait_for_tearingdown(&s_ctx, &new_fd);
         
